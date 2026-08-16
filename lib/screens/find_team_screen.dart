@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../models/team_model.dart';
 import '../services/auth_service.dart';
 import '../services/profile_storage.dart';
+import '../services/squad_invitation_storage.dart';
 import '../services/squad_request_storage.dart';
 import '../services/team_storage.dart';
 
@@ -462,6 +463,7 @@ class _PublicTeamScreenState
     extends State<PublicTeamScreen> {
   bool _checking = true;
   bool _requestPending = false;
+  bool _invitationPending = false;
   bool _sending = false;
 
   @override
@@ -479,12 +481,22 @@ class _PublicTeamScreenState
           widget.currentUserId,
     );
 
+    final bool invitationPending =
+        await SquadInvitationStorage
+            .hasPendingInvitation(
+      teamId: widget.team.id,
+      inviteeId:
+          widget.currentUserId,
+    );
+
     if (!mounted) {
       return;
     }
 
     setState(() {
       _requestPending = pending;
+      _invitationPending =
+          invitationPending;
       _checking = false;
     });
   }
@@ -492,6 +504,18 @@ class _PublicTeamScreenState
   Future<void> _requestToJoin() async {
     if (_requestPending ||
         _sending) {
+      return;
+    }
+
+    if (_invitationPending) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Tu as déjà une invitation pour cette équipe. Ouvre le Communicateur XP pour la traiter.',
+          ),
+        ),
+      );
       return;
     }
 
@@ -736,7 +760,8 @@ class _PublicTeamScreenState
                 onPressed:
                     _checking ||
                             _sending ||
-                            _requestPending
+                            _requestPending ||
+                            _invitationPending
                         ? null
                         : _requestToJoin,
                 icon:
@@ -755,17 +780,21 @@ class _PublicTeamScreenState
                             ),
                           )
                         : Icon(
-                            _requestPending
-                                ? Icons.hourglass_top
-                                : Icons.group_add,
+                            _invitationPending
+                                ? Icons.mail_outline
+                                : _requestPending
+                                    ? Icons.hourglass_top
+                                    : Icons.group_add,
                           ),
                 label:
                     Text(
-                  _requestPending
-                      ? 'DEMANDE EN ATTENTE'
-                      : _sending
-                          ? 'ENVOI...'
-                          : 'DEMANDER À REJOINDRE',
+                  _invitationPending
+                      ? 'INVITATION REÇUE'
+                      : _requestPending
+                          ? 'DEMANDE EN ATTENTE'
+                          : _sending
+                              ? 'ENVOI...'
+                              : 'DEMANDER À REJOINDRE',
                   style:
                       const TextStyle(
                     fontWeight:
@@ -800,12 +829,14 @@ class _PublicTeamScreenState
               height: 14,
             ),
 
-            const Text(
-              'La demande sera envoyée au Chef et à l’Admin de l’équipe. Ils la retrouveront dans le téléphone du Hall.',
+            Text(
+              _invitationPending
+                  ? 'Cette équipe t’a déjà invité. Retrouve l’invitation dans le Communicateur XP du Hall.'
+                  : 'La demande sera envoyée au Chef et à l’Admin de l’équipe. Ils la retrouveront dans le téléphone du Hall.',
               textAlign:
                   TextAlign.center,
               style:
-                  TextStyle(
+                  const TextStyle(
                 color:
                     Colors.white38,
                 fontSize: 11,

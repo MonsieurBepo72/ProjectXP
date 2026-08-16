@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../services/app_audio_service.dart';
 import '../services/auth_service.dart';
 import '../services/computer_settings_service.dart';
+import '../services/squad_invitation_storage.dart';
 import '../services/squad_request_notification_sync.dart';
 import '../services/squad_request_storage.dart';
 import 'computer_screen.dart';
@@ -42,7 +43,7 @@ class _HallScreenState extends State<HallScreen> {
   // NOTIFICATIONS / TÉLÉPHONE
   // ===========================================================================
 
-  int _pendingSquadRequestCount = 0;
+  int _pendingSquadActivityCount = 0;
 
   int get _unreadNotificationCount {
     if (!ComputerSettingsService
@@ -50,7 +51,7 @@ class _HallScreenState extends State<HallScreen> {
       return 0;
     }
 
-    return _pendingSquadRequestCount;
+    return _pendingSquadActivityCount;
   }
 
   // ===========================================================================
@@ -542,7 +543,7 @@ class _HallScreenState extends State<HallScreen> {
         }
 
         setState(() {
-          _pendingSquadRequestCount = 0;
+          _pendingSquadActivityCount = 0;
         });
 
         return;
@@ -559,13 +560,19 @@ class _HallScreenState extends State<HallScreen> {
         userId.trim(),
       );
 
+      final invitations =
+          await SquadInvitationStorage
+              .pendingIncomingForUser(
+        userId.trim(),
+      );
+
       if (!mounted) {
         return;
       }
 
       setState(() {
-        _pendingSquadRequestCount =
-            requests.length;
+        _pendingSquadActivityCount =
+            requests.length + invitations.length;
       });
     } catch (_) {
       if (!mounted) {
@@ -573,7 +580,7 @@ class _HallScreenState extends State<HallScreen> {
       }
 
       setState(() {
-        _pendingSquadRequestCount = 0;
+        _pendingSquadActivityCount = 0;
       });
     }
   }
@@ -604,14 +611,14 @@ class _HallScreenState extends State<HallScreen> {
     AppAudioService.instance
         .notificationFeedback();
 
-    if (_pendingSquadRequestCount > 0) {
+    if (_pendingSquadActivityCount > 0) {
       _setBjornMessage(
-        'On dirait que quelqu’un cherche à rejoindre ton Squad.',
+        'Ton Communicateur XP contient une nouvelle activité Squad.',
       );
     } else {
       _setBjornMessage(
         'Ton Communicateur XP est prêt.\n'
-        'Aucune nouvelle demande pour le moment.',
+        'Aucune nouvelle demande ou invitation pour le moment.',
       );
     }
 

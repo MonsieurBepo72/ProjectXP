@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/squad_join_request.dart';
 import '../models/team_model.dart';
 import 'auth_service.dart';
+import 'squad_invitation_storage.dart';
 import 'team_storage.dart';
 
 class SquadRequestStorage {
@@ -91,6 +92,17 @@ class SquadRequestStorage {
         !team.recruitmentOpen ||
         team.memberIds.length >=
             team.maxMembers) {
+      return false;
+    }
+
+    final bool invitationPending =
+        await SquadInvitationStorage
+            .hasPendingInvitation(
+      teamId: team.id,
+      inviteeId: requesterId,
+    );
+
+    if (invitationPending) {
       return false;
     }
 
@@ -242,6 +254,30 @@ class SquadRequestStorage {
     return result;
   }
 
+  static Future<List<SquadJoinRequest>>
+      pendingForTeam(
+    String teamId,
+  ) async {
+    final List<SquadJoinRequest> requests =
+        await loadAll();
+
+    final List<SquadJoinRequest> result =
+        requests
+            .where(
+              (request) =>
+                  request.teamId == teamId &&
+                  request.isPending,
+            )
+            .toList();
+
+    result.sort(
+      (a, b) =>
+          b.createdAt.compareTo(a.createdAt),
+    );
+
+    return result;
+  }
+
   static Future<bool> hasPendingRequest({
     required String teamId,
     required String requesterId,
@@ -331,7 +367,21 @@ class SquadRequestStorage {
       handledAt: DateTime.now(),
     );
 
-    return _saveAll(requests);
+    final bool requestSaved =
+        await _saveAll(requests);
+
+    if (!requestSaved) {
+      return false;
+    }
+
+    await SquadInvitationStorage
+        .closePendingAsAccepted(
+      teamId: request.teamId,
+      inviteeId: request.requesterId,
+      handledByUserId: handlerUserId,
+    );
+
+    return true;
   }
 
   // ===========================================================================

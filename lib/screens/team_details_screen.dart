@@ -3,13 +3,17 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import '../models/avatar_model.dart';
+import '../models/squad_team_invitation.dart';
 import '../models/team_model.dart';
 import '../services/auth_service.dart';
 import '../services/avatar_storage.dart';
+import '../services/squad_invitation_storage.dart';
+import '../services/squad_request_storage.dart';
 import '../services/team_storage.dart';
 import '../widgets/avatar_renderer.dart';
 import 'create_team_screen.dart';
 import 'public_profile_screen.dart';
+import 'squad_phone_screen.dart';
 
 class TeamDetailsScreen
     extends StatefulWidget {
@@ -38,6 +42,9 @@ class _TeamDetailsScreenState
 
   final Map<String, AvatarModel?> _memberAvatars =
       <String, AvatarModel?>{};
+
+  int _pendingJoinRequestCount = 0;
+  int _pendingInvitationCount = 0;
 
   bool _isLoading = true;
   bool _actionInProgress = false;
@@ -86,6 +93,27 @@ class _TeamDetailsScreenState
       }
     }
 
+    int pendingJoinRequestCount = 0;
+    int pendingInvitationCount = 0;
+
+    if (team != null &&
+        team.canManageTeam(
+          widget.currentUserId,
+        )) {
+      final pendingRequests =
+          await SquadRequestStorage
+              .pendingForTeam(team.id);
+
+      final pendingInvitations =
+          await SquadInvitationStorage
+              .pendingForTeam(team.id);
+
+      pendingJoinRequestCount =
+          pendingRequests.length;
+      pendingInvitationCount =
+          pendingInvitations.length;
+    }
+
     if (!mounted) {
       return;
     }
@@ -98,6 +126,10 @@ class _TeamDetailsScreenState
       _memberAvatars
         ..clear()
         ..addAll(memberAvatars);
+      _pendingJoinRequestCount =
+          pendingJoinRequestCount;
+      _pendingInvitationCount =
+          pendingInvitationCount;
       _isLoading = false;
     });
   }
@@ -659,6 +691,452 @@ class _TeamDetailsScreenState
     }
 
     await _loadTeam();
+  }
+
+  // ===========================================================================
+  // INVITATIONS / RECRUTEMENT
+  // ===========================================================================
+
+  Future<void> _openSquadPhone() async {
+    await Navigator.push<void>(
+      context,
+      MaterialPageRoute<void>(
+        builder: (context) =>
+            const SquadPhoneScreen(),
+      ),
+    );
+
+    if (!mounted) {
+      return;
+    }
+
+    await _loadTeam();
+  }
+
+  Future<void> _openInvitePlayers() async {
+    final TeamModel? team = _team;
+
+    if (team == null ||
+        !team.canManageTeam(
+          widget.currentUserId,
+        )) {
+      return;
+    }
+
+    if (team.memberIds.length >=
+        team.maxMembers) {
+      _showMessage(
+        'L’équipe est déjà complète.',
+      );
+      return;
+    }
+
+    final List<Map<String, dynamic>> accounts =
+        await AuthService.getLocalAccounts();
+
+    final List<Map<String, dynamic>> candidates =
+        accounts.where(
+      (account) {
+        final String id =
+            account['id']?.toString().trim() ?? '';
+
+        final String username =
+            account['username']
+                    ?.toString()
+                    .trim() ??
+                '';
+
+        final String email =
+            account['email']
+                    ?.toString()
+                    .trim() ??
+                '';
+
+        if (id.isEmpty ||
+            username.isEmpty ||
+            email.isEmpty ||
+            id == widget.currentUserId ||
+            team.memberIds.contains(id)) {
+          return false;
+        }
+
+        return true;
+      },
+    ).toList()
+      ..sort(
+        (a, b) =>
+            (a['username']?.toString() ?? '')
+                .toLowerCase()
+                .compareTo(
+                  (b['username']?.toString() ?? '')
+                      .toLowerCase(),
+                ),
+      );
+
+    final List<SquadTeamInvitation>
+        pendingInvitations =
+        await SquadInvitationStorage
+            .pendingForTeam(team.id);
+
+    final pendingRequests =
+        await SquadRequestStorage
+            .pendingForTeam(team.id);
+
+    final Set<String> pendingInviteeIds =
+        pendingInvitations
+            .map(
+              (invitation) =>
+                  invitation.inviteeId,
+            )
+            .toSet();
+
+    final Set<String> pendingRequesterIds =
+        pendingRequests
+            .map(
+              (request) =>
+                  request.requesterId,
+            )
+            .toSet();
+
+    final Map<String, AvatarModel?> avatars =
+        <String, AvatarModel?>{};
+
+    for (final Map<String, dynamic> account
+        in candidates) {
+      final String id =
+          account['id']?.toString() ?? '';
+
+      avatars[id] =
+          await AvatarStorage.loadAvatar(id);
+    }
+
+    if (!mounted) {
+      return;
+    }
+
+    if (candidates.isEmpty) {
+      _showMessage(
+        'Aucun autre compte local ne peut être invité pour le moment.',
+      );
+      return;
+    }
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor:
+          const Color(0xff2b1a12),
+      shape:
+          const RoundedRectangleBorder(
+        borderRadius:
+            BorderRadius.vertical(
+          top: Radius.circular(22),
+        ),
+      ),
+      builder: (sheetContext) {
+        return SafeArea(
+          top: false,
+          child: SizedBox(
+            height:
+                MediaQuery.sizeOf(sheetContext)
+                        .height *
+                    0.78,
+            child: Column(
+              children: [
+                const SizedBox(height: 14),
+                Container(
+                  width: 44,
+                  height: 5,
+                  decoration: BoxDecoration(
+                    color: Colors.white24,
+                    borderRadius:
+                        BorderRadius.circular(10),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  'INVITER UN JOUEUR',
+                  style: TextStyle(
+                    color: Colors.amber,
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  '${team.name} • ${team.memberIds.length}/${team.maxMembers} membres',
+                  style: const TextStyle(
+                    color: Colors.white54,
+                    fontSize: 12,
+                  ),
+                ),
+                const SizedBox(height: 15),
+                Expanded(
+                  child: ListView.builder(
+                    padding:
+                        const EdgeInsets.fromLTRB(
+                      16,
+                      0,
+                      16,
+                      20,
+                    ),
+                    itemCount: candidates.length,
+                    itemBuilder: (context, index) {
+                      final Map<String, dynamic>
+                          account = candidates[index];
+
+                      final String userId =
+                          account['id']?.toString() ?? '';
+
+                      final String username =
+                          account['username']
+                                  ?.toString()
+                                  .trim() ??
+                              'Joueur';
+
+                      final bool invitePending =
+                          pendingInviteeIds.contains(
+                        userId,
+                      );
+
+                      final bool requestPending =
+                          pendingRequesterIds.contains(
+                        userId,
+                      );
+
+                      return Container(
+                        margin:
+                            const EdgeInsets.only(
+                          bottom: 9,
+                        ),
+                        padding:
+                            const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color:
+                              const Color(0xff1b120d),
+                          borderRadius:
+                              BorderRadius.circular(13),
+                          border: Border.all(
+                            color: Colors.white12,
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            _MemberAvatar(
+                              avatar: avatars[userId],
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: InkWell(
+                                onTap: () {
+                                  Navigator.pop(
+                                    sheetContext,
+                                  );
+                                  _openMemberProfile(
+                                    userId,
+                                  );
+                                },
+                                child: Padding(
+                                  padding:
+                                      const EdgeInsets.symmetric(
+                                    vertical: 8,
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        username,
+                                        overflow:
+                                            TextOverflow.ellipsis,
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 3),
+                                      Text(
+                                        requestPending
+                                            ? 'A déjà demandé à rejoindre'
+                                            : invitePending
+                                                ? 'Invitation en attente'
+                                                : 'Voir le profil ou inviter',
+                                        style: TextStyle(
+                                          color: requestPending ||
+                                                  invitePending
+                                              ? Colors.amber
+                                              : Colors.white38,
+                                          fontSize: 10,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            SizedBox(
+                              width: 104,
+                              child: OutlinedButton(
+                                onPressed: invitePending ||
+                                        requestPending
+                                    ? null
+                                    : () {
+                                        Navigator.pop(
+                                          sheetContext,
+                                        );
+                                        _sendInvitation(
+                                          team: team,
+                                          inviteeId: userId,
+                                          inviteeName: username,
+                                        );
+                                      },
+                                style:
+                                    OutlinedButton.styleFrom(
+                                  foregroundColor: Colors.amber,
+                                  side: const BorderSide(
+                                    color: Colors.amber,
+                                  ),
+                                  disabledForegroundColor:
+                                      Colors.white38,
+                                ),
+                                child: Text(
+                                  requestPending
+                                      ? 'DEMANDE'
+                                      : invitePending
+                                          ? 'INVITÉ'
+                                          : 'INVITER',
+                                  style: const TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _sendInvitation({
+    required TeamModel team,
+    required String inviteeId,
+    required String inviteeName,
+  }) async {
+    if (_actionInProgress) {
+      return;
+    }
+
+    setState(() {
+      _actionInProgress = true;
+    });
+
+    final String inviterName =
+        (await AuthService.getCurrentUsername())
+                ?.trim() ??
+            widget.currentUsername.trim();
+
+    final SquadInvitationCreateResult result =
+        await SquadInvitationStorage
+            .createInvitation(
+      team: team,
+      inviterId: widget.currentUserId,
+      inviterName: inviterName,
+      inviteeId: inviteeId,
+      inviteeName: inviteeName,
+    );
+
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _actionInProgress = false;
+    });
+
+    switch (result) {
+      case SquadInvitationCreateResult.success:
+        _showMessage(
+          'Invitation envoyée à $inviteeName.',
+        );
+        await _loadTeam();
+        return;
+
+      case SquadInvitationCreateResult.alreadyPending:
+        _showMessage(
+          'Une invitation est déjà en attente pour $inviteeName.',
+        );
+        return;
+
+      case SquadInvitationCreateResult.alreadyMember:
+        _showMessage(
+          '$inviteeName fait déjà partie de l’équipe.',
+        );
+        return;
+
+      case SquadInvitationCreateResult.teamFull:
+        _showMessage(
+          'L’équipe est complète.',
+        );
+        return;
+
+      case SquadInvitationCreateResult.notAllowed:
+        _showMessage(
+          'Tu n’as plus les droits pour inviter dans cette équipe.',
+        );
+        return;
+
+      case SquadInvitationCreateResult.invalid:
+        _showMessage(
+          'Impossible d’envoyer cette invitation.',
+        );
+        return;
+    }
+  }
+
+  List<String> _sortedMemberIds(
+    TeamModel team,
+  ) {
+    final List<String> ids =
+        List<String>.from(team.memberIds);
+
+    int rank(String id) {
+      if (id == team.ownerId) {
+        return 0;
+      }
+
+      if (id == team.leaderId) {
+        return 1;
+      }
+
+      return 2;
+    }
+
+    ids.sort((a, b) {
+      final int roleCompare =
+          rank(a).compareTo(rank(b));
+
+      if (roleCompare != 0) {
+        return roleCompare;
+      }
+
+      return _memberName(team, a)
+          .toLowerCase()
+          .compareTo(
+            _memberName(team, b).toLowerCase(),
+          );
+    });
+
+    return ids;
   }
 
   // ===========================================================================
@@ -1225,18 +1703,103 @@ class _TeamDetailsScreenState
                 height: 28,
               ),
 
-              const _SectionTitle(
+              _SectionTitle(
                 icon:
                     Icons.people,
                 title:
-                    'MEMBRES',
+                    'MEMBRES (${team.memberIds.length}/${team.maxMembers})',
               ),
 
               const SizedBox(
                 height: 10,
               ),
 
-              ...team.memberIds.map(
+              if (canManage) ...[
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: _actionInProgress ||
+                                team.memberIds.length >= team.maxMembers
+                            ? null
+                            : _openInvitePlayers,
+                        icon: const Icon(
+                          Icons.person_add_alt_1,
+                        ),
+                        label: const Text(
+                          'INVITER UN JOUEUR',
+                        ),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.amber,
+                          side: const BorderSide(
+                            color: Colors.amber,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 9),
+                    IconButton.outlined(
+                      onPressed: _openSquadPhone,
+                      tooltip: 'Ouvrir le Communicateur XP',
+                      icon: Badge(
+                        isLabelVisible:
+                            _pendingJoinRequestCount > 0 ||
+                            _pendingInvitationCount > 0,
+                        label: Text(
+                          (_pendingJoinRequestCount +
+                                  _pendingInvitationCount)
+                              .toString(),
+                        ),
+                        child: const Icon(
+                          Icons.smartphone,
+                        ),
+                      ),
+                      color: Colors.amber,
+                    ),
+                  ],
+                ),
+
+                if (_pendingJoinRequestCount > 0 ||
+                    _pendingInvitationCount > 0) ...[
+                  const SizedBox(height: 9),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xff2b1a12),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: Colors.amber.withValues(alpha: 0.35),
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(
+                          Icons.notifications_active_outlined,
+                          color: Colors.amber,
+                          size: 20,
+                        ),
+                        const SizedBox(width: 9),
+                        Expanded(
+                          child: Text(
+                            '$_pendingJoinRequestCount demande(s) à traiter • ' 
+                            '$_pendingInvitationCount invitation(s) en attente',
+                            style: const TextStyle(
+                              color: Colors.white60,
+                              fontSize: 11,
+                              height: 1.35,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+
+                const SizedBox(height: 12),
+              ],
+
+              ..._sortedMemberIds(team).map(
                 (memberId) {
                   final bool hasActions =
                       (isOwner &&
@@ -1400,7 +1963,7 @@ class _TeamDetailsScreenState
               ),
 
               const Text(
-                'Les invitations et demandes reçues sont gérées depuis le téléphone du Hall.',
+                'Les demandes d’adhésion et les invitations sont centralisées dans le Communicateur XP du Hall.',
                 textAlign:
                     TextAlign.center,
                 style:
