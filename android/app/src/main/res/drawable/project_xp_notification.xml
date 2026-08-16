@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+
+    <!--
+      Icône monochrome adaptée aux petites notifications Android :
+      un bouclier / cristal Project XP.
+    -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M12,2 L20,6 L18.7,15.1 C18.2,18.3 15.7,20.8 12,22 C8.3,20.8 5.8,18.3 5.3,15.1 L4,6 Z" />
+
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#00000000"
+        android:pathData="M12,6 L15,12 L12,18 L9,12 Z" />
+</vector>
