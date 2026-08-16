@@ -19,6 +19,23 @@ enum AuthRegisterResult {
   weakPassword,
 }
 
+
+enum AuthPasswordChangeResult {
+  success,
+  invalidCurrentPassword,
+  weakNewPassword,
+  sameAsCurrentPassword,
+  accountNotFound,
+}
+
+enum AuthEmailChangeResult {
+  success,
+  invalidCurrentPassword,
+  invalidEmail,
+  emailAlreadyUsed,
+  accountNotFound,
+}
+
 class AuthService {
   // ===========================================================================
   // CLÉS DE COMPATIBILITÉ
@@ -602,6 +619,252 @@ class AuthService {
     );
 
     return true;
+  }
+
+
+  /// Vérifie le mot de passe du compte actuellement actif sans modifier
+  /// la session ni réactiver un autre compte.
+  static Future<bool> verifyCurrentPassword(
+    String password,
+  ) async {
+    await initialize();
+
+    if (password.isEmpty) {
+      return false;
+    }
+
+    final SharedPreferences prefs =
+        await SharedPreferences.getInstance();
+
+    final String? userId =
+        prefs.getString(_userIdKey);
+
+    if (userId == null ||
+        userId.trim().isEmpty) {
+      return false;
+    }
+
+    final List<Map<String, dynamic>> accounts =
+        _readAccountsFromPrefs(prefs);
+
+    final int index =
+        accounts.indexWhere(
+      (account) =>
+          account['id']?.toString() ==
+          userId.trim(),
+    );
+
+    if (index == -1 ||
+        !_accountHasPassword(
+          accounts[index],
+        )) {
+      return false;
+    }
+
+    return _verifyPassword(
+      password: password,
+      account: accounts[index],
+    );
+  }
+
+  static Future<AuthPasswordChangeResult>
+      changeCurrentPassword({
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    await initialize();
+
+    final String? passwordError =
+        validatePassword(newPassword);
+
+    if (passwordError != null) {
+      return AuthPasswordChangeResult
+          .weakNewPassword;
+    }
+
+    final SharedPreferences prefs =
+        await SharedPreferences.getInstance();
+
+    final String? userId =
+        prefs.getString(_userIdKey);
+
+    if (userId == null ||
+        userId.trim().isEmpty) {
+      return AuthPasswordChangeResult
+          .accountNotFound;
+    }
+
+    final List<Map<String, dynamic>> accounts =
+        _readAccountsFromPrefs(prefs);
+
+    final int index =
+        accounts.indexWhere(
+      (account) =>
+          account['id']?.toString() ==
+          userId.trim(),
+    );
+
+    if (index == -1 ||
+        !_accountHasPassword(
+          accounts[index],
+        )) {
+      return AuthPasswordChangeResult
+          .accountNotFound;
+    }
+
+    final bool currentPasswordValid =
+        await _verifyPassword(
+      password: currentPassword,
+      account: accounts[index],
+    );
+
+    if (!currentPasswordValid) {
+      return AuthPasswordChangeResult
+          .invalidCurrentPassword;
+    }
+
+    final bool samePassword =
+        await _verifyPassword(
+      password: newPassword,
+      account: accounts[index],
+    );
+
+    if (samePassword) {
+      return AuthPasswordChangeResult
+          .sameAsCurrentPassword;
+    }
+
+    final Map<String, dynamic> passwordFields =
+        await _createPasswordFields(
+      newPassword,
+    );
+
+    accounts[index] = {
+      ...accounts[index],
+      ...passwordFields,
+      'passwordUpdatedAt':
+          DateTime.now().toIso8601String(),
+    };
+
+    await _saveAccountsToPrefs(
+      prefs,
+      accounts,
+    );
+
+    return AuthPasswordChangeResult.success;
+  }
+
+  static Future<AuthEmailChangeResult>
+      changeCurrentEmail({
+    required String currentPassword,
+    required String newEmail,
+  }) async {
+    await initialize();
+
+    final String normalizedEmail =
+        newEmail.trim().toLowerCase();
+
+    final bool validEmail =
+        RegExp(
+      r'^[^@\s]+@[^@\s]+\.[^@\s]+$',
+    ).hasMatch(normalizedEmail);
+
+    if (!validEmail) {
+      return AuthEmailChangeResult
+          .invalidEmail;
+    }
+
+    final SharedPreferences prefs =
+        await SharedPreferences.getInstance();
+
+    final String? userId =
+        prefs.getString(_userIdKey);
+
+    if (userId == null ||
+        userId.trim().isEmpty) {
+      return AuthEmailChangeResult
+          .accountNotFound;
+    }
+
+    final String cleanUserId =
+        userId.trim();
+
+    final List<Map<String, dynamic>> accounts =
+        _readAccountsFromPrefs(prefs);
+
+    final int index =
+        accounts.indexWhere(
+      (account) =>
+          account['id']?.toString() ==
+          cleanUserId,
+    );
+
+    if (index == -1 ||
+        !_accountHasPassword(
+          accounts[index],
+        )) {
+      return AuthEmailChangeResult
+          .accountNotFound;
+    }
+
+    final bool passwordValid =
+        await _verifyPassword(
+      password: currentPassword,
+      account: accounts[index],
+    );
+
+    if (!passwordValid) {
+      return AuthEmailChangeResult
+          .invalidCurrentPassword;
+    }
+
+    final bool emailAlreadyUsed =
+        accounts.any(
+      (account) {
+        final String accountId =
+            account['id']?.toString() ?? '';
+
+        if (accountId ==
+            cleanUserId) {
+          return false;
+        }
+
+        final String accountEmail =
+            account['email']
+                    ?.toString()
+                    .trim()
+                    .toLowerCase() ??
+                '';
+
+        return accountEmail.isNotEmpty &&
+            accountEmail ==
+                normalizedEmail;
+      },
+    );
+
+    if (emailAlreadyUsed) {
+      return AuthEmailChangeResult
+          .emailAlreadyUsed;
+    }
+
+    accounts[index] = {
+      ...accounts[index],
+      'email': normalizedEmail,
+      'emailUpdatedAt':
+          DateTime.now().toIso8601String(),
+    };
+
+    await _saveAccountsToPrefs(
+      prefs,
+      accounts,
+    );
+
+    await prefs.setString(
+      _emailKey,
+      normalizedEmail,
+    );
+
+    return AuthEmailChangeResult.success;
   }
 
   // ===========================================================================

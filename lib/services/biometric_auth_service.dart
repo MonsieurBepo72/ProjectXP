@@ -173,6 +173,42 @@ class BiometricAuthService {
     );
   }
 
+
+  static Future<bool>
+      isEnabledForCurrentAccount() async {
+    final String? currentUserId =
+        await AuthService.getCurrentUserId();
+
+    final String? enabledUserId =
+        await getEnabledUserId();
+
+    if (currentUserId == null ||
+        enabledUserId == null) {
+      return false;
+    }
+
+    return currentUserId.trim() ==
+        enabledUserId.trim();
+  }
+
+  static Future<void>
+      disableForCurrentAccount() async {
+    final String? currentUserId =
+        await AuthService.getCurrentUserId();
+
+    final String? enabledUserId =
+        await getEnabledUserId();
+
+    if (currentUserId == null ||
+        enabledUserId == null ||
+        currentUserId.trim() !=
+            enabledUserId.trim()) {
+      return;
+    }
+
+    await disable();
+  }
+
   static Future<bool> canUseBiometricLogin() async {
     final String? userId =
         await getEnabledUserId();
