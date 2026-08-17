@@ -2,11 +2,11 @@ import 'dart:convert';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../models/squad_team_invitation.dart';
+import '../models/compagnie_team_invitation.dart';
 import '../models/team_model.dart';
 import 'team_storage.dart';
 
-enum SquadInvitationCreateResult {
+enum CompagnieInvitationCreateResult {
   success,
   invalid,
   notAllowed,
@@ -15,24 +15,42 @@ enum SquadInvitationCreateResult {
   alreadyPending,
 }
 
-class SquadInvitationStorage {
+class CompagnieInvitationStorage {
   static const String _storageKey =
+      'project_xp_compagnie_team_invitations';
+
+  // Compatibilite : copie une seule fois les anciennes donnees Squad.
+  static const String _legacyStorageKey =
       'project_xp_squad_team_invitations';
 
   // ===========================================================================
   // CHARGEMENT / SAUVEGARDE
   // ===========================================================================
 
-  static Future<List<SquadTeamInvitation>>
+  static Future<List<CompagnieTeamInvitation>>
       loadAll() async {
     final SharedPreferences prefs =
         await SharedPreferences.getInstance();
 
-    final String? raw =
+    String? raw =
         prefs.getString(_storageKey);
 
     if (raw == null || raw.isEmpty) {
-      return <SquadTeamInvitation>[];
+      final String? legacyRaw =
+          prefs.getString(_legacyStorageKey);
+
+      if (legacyRaw != null && legacyRaw.isNotEmpty) {
+        await prefs.setString(
+          _storageKey,
+          legacyRaw,
+        );
+
+        raw = legacyRaw;
+      }
+    }
+
+    if (raw == null || raw.isEmpty) {
+      return <CompagnieTeamInvitation>[];
     }
 
     try {
@@ -40,14 +58,14 @@ class SquadInvitationStorage {
           jsonDecode(raw);
 
       if (decoded is! List) {
-        return <SquadTeamInvitation>[];
+        return <CompagnieTeamInvitation>[];
       }
 
       return decoded
           .whereType<Map>()
           .map(
             (item) =>
-                SquadTeamInvitation.fromMap(
+                CompagnieTeamInvitation.fromMap(
               Map<String, dynamic>.from(
                 item,
               ),
@@ -55,12 +73,12 @@ class SquadInvitationStorage {
           )
           .toList();
     } catch (_) {
-      return <SquadTeamInvitation>[];
+      return <CompagnieTeamInvitation>[];
     }
   }
 
   static Future<bool> _saveAll(
-    List<SquadTeamInvitation> invitations,
+    List<CompagnieTeamInvitation> invitations,
   ) async {
     final SharedPreferences prefs =
         await SharedPreferences.getInstance();
@@ -82,7 +100,7 @@ class SquadInvitationStorage {
   // CRÉER UNE INVITATION
   // ===========================================================================
 
-  static Future<SquadInvitationCreateResult>
+  static Future<CompagnieInvitationCreateResult>
       createInvitation({
     required TeamModel team,
     required String inviterId,
@@ -106,34 +124,34 @@ class SquadInvitationStorage {
         cleanInviteeId.isEmpty ||
         cleanInviterId == cleanInviteeId ||
         cleanInviteeName.isEmpty) {
-      return SquadInvitationCreateResult.invalid;
+      return CompagnieInvitationCreateResult.invalid;
     }
 
     final TeamModel? latestTeam =
         await TeamStorage.getTeam(team.id);
 
     if (latestTeam == null) {
-      return SquadInvitationCreateResult.invalid;
+      return CompagnieInvitationCreateResult.invalid;
     }
 
     if (!latestTeam.canManageTeam(
       cleanInviterId,
     )) {
-      return SquadInvitationCreateResult.notAllowed;
+      return CompagnieInvitationCreateResult.notAllowed;
     }
 
     if (latestTeam.memberIds.contains(
       cleanInviteeId,
     )) {
-      return SquadInvitationCreateResult.alreadyMember;
+      return CompagnieInvitationCreateResult.alreadyMember;
     }
 
     if (latestTeam.memberIds.length >=
         latestTeam.maxMembers) {
-      return SquadInvitationCreateResult.teamFull;
+      return CompagnieInvitationCreateResult.teamFull;
     }
 
-    final List<SquadTeamInvitation>
+    final List<CompagnieTeamInvitation>
         invitations = await loadAll();
 
     final bool alreadyPending =
@@ -146,11 +164,11 @@ class SquadInvitationStorage {
     );
 
     if (alreadyPending) {
-      return SquadInvitationCreateResult.alreadyPending;
+      return CompagnieInvitationCreateResult.alreadyPending;
     }
 
     invitations.add(
-      SquadTeamInvitation(
+      CompagnieTeamInvitation(
         id: DateTime.now()
             .microsecondsSinceEpoch
             .toString(),
@@ -174,22 +192,22 @@ class SquadInvitationStorage {
         await _saveAll(invitations);
 
     return saved
-        ? SquadInvitationCreateResult.success
-        : SquadInvitationCreateResult.invalid;
+        ? CompagnieInvitationCreateResult.success
+        : CompagnieInvitationCreateResult.invalid;
   }
 
   // ===========================================================================
   // LECTURE
   // ===========================================================================
 
-  static Future<List<SquadTeamInvitation>>
+  static Future<List<CompagnieTeamInvitation>>
       incomingForUser(
     String userId,
   ) async {
-    final List<SquadTeamInvitation> all =
+    final List<CompagnieTeamInvitation> all =
         await loadAll();
 
-    final List<SquadTeamInvitation> result =
+    final List<CompagnieTeamInvitation> result =
         all
             .where(
               (invitation) =>
@@ -205,11 +223,11 @@ class SquadInvitationStorage {
     return result;
   }
 
-  static Future<List<SquadTeamInvitation>>
+  static Future<List<CompagnieTeamInvitation>>
       pendingIncomingForUser(
     String userId,
   ) async {
-    final List<SquadTeamInvitation> all =
+    final List<CompagnieTeamInvitation> all =
         await incomingForUser(userId);
 
     return all
@@ -220,14 +238,14 @@ class SquadInvitationStorage {
         .toList();
   }
 
-  static Future<List<SquadTeamInvitation>>
+  static Future<List<CompagnieTeamInvitation>>
       outgoingForUser(
     String userId,
   ) async {
-    final List<SquadTeamInvitation> all =
+    final List<CompagnieTeamInvitation> all =
         await loadAll();
 
-    final List<SquadTeamInvitation> result =
+    final List<CompagnieTeamInvitation> result =
         all
             .where(
               (invitation) =>
@@ -243,14 +261,14 @@ class SquadInvitationStorage {
     return result;
   }
 
-  static Future<List<SquadTeamInvitation>>
+  static Future<List<CompagnieTeamInvitation>>
       pendingForTeam(
     String teamId,
   ) async {
-    final List<SquadTeamInvitation> all =
+    final List<CompagnieTeamInvitation> all =
         await loadAll();
 
-    final List<SquadTeamInvitation> result =
+    final List<CompagnieTeamInvitation> result =
         all
             .where(
               (invitation) =>
@@ -271,7 +289,7 @@ class SquadInvitationStorage {
     required String teamId,
     required String inviteeId,
   }) async {
-    final List<SquadTeamInvitation> all =
+    final List<CompagnieTeamInvitation> all =
         await loadAll();
 
     return all.any(
@@ -290,7 +308,7 @@ class SquadInvitationStorage {
     required String invitationId,
     required String inviteeId,
   }) async {
-    final List<SquadTeamInvitation>
+    final List<CompagnieTeamInvitation>
         invitations = await loadAll();
 
     final int index = invitations.indexWhere(
@@ -302,7 +320,7 @@ class SquadInvitationStorage {
       return false;
     }
 
-    final SquadTeamInvitation invitation =
+    final CompagnieTeamInvitation invitation =
         invitations[index];
 
     if (!invitation.isPending ||
@@ -356,7 +374,7 @@ class SquadInvitationStorage {
     required String invitationId,
     required String inviteeId,
   }) async {
-    final List<SquadTeamInvitation>
+    final List<CompagnieTeamInvitation>
         invitations = await loadAll();
 
     final int index = invitations.indexWhere(
@@ -368,7 +386,7 @@ class SquadInvitationStorage {
       return false;
     }
 
-    final SquadTeamInvitation invitation =
+    final CompagnieTeamInvitation invitation =
         invitations[index];
 
     if (!invitation.isPending ||
@@ -390,7 +408,7 @@ class SquadInvitationStorage {
     required String invitationId,
     required String requesterId,
   }) async {
-    final List<SquadTeamInvitation>
+    final List<CompagnieTeamInvitation>
         invitations = await loadAll();
 
     final int index = invitations.indexWhere(
@@ -402,7 +420,7 @@ class SquadInvitationStorage {
       return false;
     }
 
-    final SquadTeamInvitation invitation =
+    final CompagnieTeamInvitation invitation =
         invitations[index];
 
     if (!invitation.isPending) {
@@ -440,7 +458,7 @@ class SquadInvitationStorage {
     required String inviteeId,
     required String handledByUserId,
   }) async {
-    final List<SquadTeamInvitation>
+    final List<CompagnieTeamInvitation>
         invitations = await loadAll();
 
     bool changed = false;
@@ -448,7 +466,7 @@ class SquadInvitationStorage {
     for (int i = 0;
         i < invitations.length;
         i++) {
-      final SquadTeamInvitation invitation =
+      final CompagnieTeamInvitation invitation =
           invitations[i];
 
       if (invitation.teamId == teamId &&

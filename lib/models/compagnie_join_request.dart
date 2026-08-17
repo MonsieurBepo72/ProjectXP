@@ -1,4 +1,4 @@
-class SquadJoinRequest {
+class CompagnieJoinRequest {
   final String id;
 
   final String teamId;
@@ -23,7 +23,7 @@ class SquadJoinRequest {
   final DateTime createdAt;
   final DateTime? handledAt;
 
-  const SquadJoinRequest({
+  const CompagnieJoinRequest({
     required this.id,
     required this.teamId,
     required this.teamName,
@@ -46,7 +46,7 @@ class SquadJoinRequest {
   bool get isRejected =>
       status == 'rejected';
 
-  SquadJoinRequest copyWith({
+  CompagnieJoinRequest copyWith({
     List<String>? recipientIds,
     String? status,
     String? handledByUserId,
@@ -55,7 +55,7 @@ class SquadJoinRequest {
     bool clearHandledBy = false,
     bool clearHandledAt = false,
   }) {
-    return SquadJoinRequest(
+    return CompagnieJoinRequest(
       id: id,
       teamId: teamId,
       teamName: teamName,
@@ -99,10 +99,10 @@ class SquadJoinRequest {
     };
   }
 
-  factory SquadJoinRequest.fromMap(
+  factory CompagnieJoinRequest.fromMap(
     Map<String, dynamic> map,
   ) {
-    return SquadJoinRequest(
+    return CompagnieJoinRequest(
       id:
           map['id']?.toString() ?? '',
       teamId:

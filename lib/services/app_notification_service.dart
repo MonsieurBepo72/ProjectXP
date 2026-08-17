@@ -73,7 +73,7 @@ class AppNotificationService {
     // simplement Project XP.
     //
     // Plus tard, on pourra utiliser response.payload
-    // pour ouvrir directement le Squad, la Taverne,
+    // pour ouvrir directement le Compagnie, la Taverne,
     // une invitation précise, etc.
   }
 
@@ -181,14 +181,14 @@ class AppNotificationService {
     );
   }
 
-  Future<void> showSquadInvitation(
+  Future<void> showCompagnieInvitation(
     String playerName,
   ) async {
     await show(
-      title: 'Invitation Squad',
+      title: 'Invitation Compagnie',
       body:
           '$playerName veut rejoindre ton aventure.',
-      payload: 'squad_invitation',
+      payload: 'compagnie_invitation',
     );
   }
 

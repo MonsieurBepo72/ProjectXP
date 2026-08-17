@@ -1,42 +1,42 @@
 import 'package:flutter/material.dart';
 
 import '../models/avatar_model.dart';
-import '../models/squad_join_request.dart';
-import '../models/squad_team_invitation.dart';
+import '../models/compagnie_join_request.dart';
+import '../models/compagnie_team_invitation.dart';
 import '../services/auth_service.dart';
 import '../services/avatar_storage.dart';
-import '../services/squad_invitation_storage.dart';
-import '../services/squad_request_storage.dart';
+import '../services/compagnie_invitation_storage.dart';
+import '../services/compagnie_request_storage.dart';
 import '../widgets/avatar_renderer.dart';
 import 'public_profile_screen.dart';
 
-class SquadPhoneScreen extends StatefulWidget {
-  const SquadPhoneScreen({
+class CompagniePhoneScreen extends StatefulWidget {
+  const CompagniePhoneScreen({
     super.key,
   });
 
   @override
-  State<SquadPhoneScreen> createState() =>
-      _SquadPhoneScreenState();
+  State<CompagniePhoneScreen> createState() =>
+      _CompagniePhoneScreenState();
 }
 
-class _SquadPhoneScreenState
-    extends State<SquadPhoneScreen> {
+class _CompagniePhoneScreenState
+    extends State<CompagniePhoneScreen> {
   String _currentUserId = '';
 
-  List<SquadJoinRequest> _incomingRequests =
-      <SquadJoinRequest>[];
+  List<CompagnieJoinRequest> _incomingRequests =
+      <CompagnieJoinRequest>[];
 
-  List<SquadJoinRequest> _outgoingRequests =
-      <SquadJoinRequest>[];
+  List<CompagnieJoinRequest> _outgoingRequests =
+      <CompagnieJoinRequest>[];
 
-  List<SquadTeamInvitation>
+  List<CompagnieTeamInvitation>
       _incomingInvitations =
-      <SquadTeamInvitation>[];
+      <CompagnieTeamInvitation>[];
 
-  List<SquadTeamInvitation>
+  List<CompagnieTeamInvitation>
       _outgoingInvitations =
-      <SquadTeamInvitation>[];
+      <CompagnieTeamInvitation>[];
 
   final Map<String, String> _resolvedNames =
       <String, String>{};
@@ -71,52 +71,52 @@ class _SquadPhoneScreenState
       setState(() {
         _currentUserId = '';
         _incomingRequests =
-            <SquadJoinRequest>[];
+            <CompagnieJoinRequest>[];
         _outgoingRequests =
-            <SquadJoinRequest>[];
+            <CompagnieJoinRequest>[];
         _incomingInvitations =
-            <SquadTeamInvitation>[];
+            <CompagnieTeamInvitation>[];
         _outgoingInvitations =
-            <SquadTeamInvitation>[];
+            <CompagnieTeamInvitation>[];
         _loading = false;
       });
       return;
     }
 
-    final List<SquadJoinRequest>
+    final List<CompagnieJoinRequest>
         incomingRequests =
-        await SquadRequestStorage
+        await CompagnieRequestStorage
             .incomingForUser(id);
 
-    final List<SquadJoinRequest>
+    final List<CompagnieJoinRequest>
         outgoingRequests =
-        await SquadRequestStorage
+        await CompagnieRequestStorage
             .outgoingForUser(id);
 
-    final List<SquadTeamInvitation>
+    final List<CompagnieTeamInvitation>
         incomingInvitations =
-        await SquadInvitationStorage
+        await CompagnieInvitationStorage
             .incomingForUser(id);
 
-    final List<SquadTeamInvitation>
+    final List<CompagnieTeamInvitation>
         outgoingInvitations =
-        await SquadInvitationStorage
+        await CompagnieInvitationStorage
             .outgoingForUser(id);
 
     final Set<String> peopleIds =
         <String>{};
 
-    for (final SquadJoinRequest request
+    for (final CompagnieJoinRequest request
         in incomingRequests) {
       peopleIds.add(request.requesterId);
     }
 
-    for (final SquadTeamInvitation invitation
+    for (final CompagnieTeamInvitation invitation
         in incomingInvitations) {
       peopleIds.add(invitation.inviterId);
     }
 
-    for (final SquadTeamInvitation invitation
+    for (final CompagnieTeamInvitation invitation
         in outgoingInvitations) {
       peopleIds.add(invitation.inviteeId);
     }
@@ -203,7 +203,7 @@ class _SquadPhoneScreenState
   // ===========================================================================
 
   Future<void> _acceptRequest(
-    SquadJoinRequest request,
+    CompagnieJoinRequest request,
   ) async {
     if (_actionInProgress ||
         !request.isPending) {
@@ -231,7 +231,7 @@ class _SquadPhoneScreenState
     });
 
     final bool success =
-        await SquadRequestStorage
+        await CompagnieRequestStorage
             .acceptRequest(
       requestId: request.id,
       handlerUserId: _currentUserId,
@@ -259,7 +259,7 @@ class _SquadPhoneScreenState
   }
 
   Future<void> _rejectRequest(
-    SquadJoinRequest request,
+    CompagnieJoinRequest request,
   ) async {
     if (_actionInProgress ||
         !request.isPending) {
@@ -288,7 +288,7 @@ class _SquadPhoneScreenState
     });
 
     final bool success =
-        await SquadRequestStorage
+        await CompagnieRequestStorage
             .rejectRequest(
       requestId: request.id,
       handlerUserId: _currentUserId,
@@ -320,7 +320,7 @@ class _SquadPhoneScreenState
   // ===========================================================================
 
   Future<void> _acceptInvitation(
-    SquadTeamInvitation invitation,
+    CompagnieTeamInvitation invitation,
   ) async {
     if (_actionInProgress ||
         !invitation.isPending) {
@@ -343,7 +343,7 @@ class _SquadPhoneScreenState
     });
 
     final bool success =
-        await SquadInvitationStorage
+        await CompagnieInvitationStorage
             .acceptInvitation(
       invitationId: invitation.id,
       inviteeId: _currentUserId,
@@ -371,7 +371,7 @@ class _SquadPhoneScreenState
   }
 
   Future<void> _rejectInvitation(
-    SquadTeamInvitation invitation,
+    CompagnieTeamInvitation invitation,
   ) async {
     if (_actionInProgress ||
         !invitation.isPending) {
@@ -395,7 +395,7 @@ class _SquadPhoneScreenState
     });
 
     final bool success =
-        await SquadInvitationStorage
+        await CompagnieInvitationStorage
             .rejectInvitation(
       invitationId: invitation.id,
       inviteeId: _currentUserId,
@@ -421,7 +421,7 @@ class _SquadPhoneScreenState
   }
 
   Future<void> _cancelInvitation(
-    SquadTeamInvitation invitation,
+    CompagnieTeamInvitation invitation,
   ) async {
     if (_actionInProgress ||
         !invitation.isPending) {
@@ -450,7 +450,7 @@ class _SquadPhoneScreenState
     });
 
     final bool success =
-        await SquadInvitationStorage
+        await CompagnieInvitationStorage
             .cancelInvitation(
       invitationId: invitation.id,
       requesterId: _currentUserId,
@@ -809,7 +809,7 @@ class _PhoneHeader extends StatelessWidget {
                   CrossAxisAlignment.start,
               children: [
                 const Text(
-                  'CENTRE SQUAD',
+                  'CENTRE COMPAGNIE',
                   style: TextStyle(
                     color: Color(0xffffc857),
                     fontWeight: FontWeight.bold,
@@ -871,7 +871,7 @@ class _SectionTitle extends StatelessWidget {
 
 class _IncomingInvitationCard
     extends StatelessWidget {
-  final SquadTeamInvitation invitation;
+  final CompagnieTeamInvitation invitation;
   final String inviterName;
   final AvatarModel? inviterAvatar;
   final bool busy;
@@ -944,7 +944,7 @@ class _IncomingInvitationCard
 
 class _IncomingRequestCard
     extends StatelessWidget {
-  final SquadJoinRequest request;
+  final CompagnieJoinRequest request;
   final String requesterName;
   final AvatarModel? requesterAvatar;
   final bool busy;
@@ -1017,7 +1017,7 @@ class _IncomingRequestCard
 
 class _OutgoingRequestCard
     extends StatelessWidget {
-  final SquadJoinRequest request;
+  final CompagnieJoinRequest request;
 
   const _OutgoingRequestCard({
     required this.request,
@@ -1044,7 +1044,7 @@ class _OutgoingRequestCard
 
 class _OutgoingInvitationCard
     extends StatelessWidget {
-  final SquadTeamInvitation invitation;
+  final CompagnieTeamInvitation invitation;
   final String inviteeName;
   final AvatarModel? inviteeAvatar;
   final bool busy;

@@ -5,8 +5,8 @@ import 'package:flutter/material.dart';
 import '../models/team_model.dart';
 import '../services/auth_service.dart';
 import '../services/profile_storage.dart';
-import '../services/squad_invitation_storage.dart';
-import '../services/squad_request_storage.dart';
+import '../services/compagnie_invitation_storage.dart';
+import '../services/compagnie_request_storage.dart';
 import '../services/team_storage.dart';
 
 class FindTeamScreen extends StatefulWidget {
@@ -474,7 +474,7 @@ class _PublicTeamScreenState
 
   Future<void> _checkRequest() async {
     final bool pending =
-        await SquadRequestStorage
+        await CompagnieRequestStorage
             .hasPendingRequest(
       teamId: widget.team.id,
       requesterId:
@@ -482,7 +482,7 @@ class _PublicTeamScreenState
     );
 
     final bool invitationPending =
-        await SquadInvitationStorage
+        await CompagnieInvitationStorage
             .hasPendingInvitation(
       teamId: widget.team.id,
       inviteeId:
@@ -524,7 +524,7 @@ class _PublicTeamScreenState
     });
 
     final bool success =
-        await SquadRequestStorage
+        await CompagnieRequestStorage
             .createRequest(
       team: widget.team,
       requesterId:

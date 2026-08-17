@@ -1,15 +1,17 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../services/app_audio_service.dart';
 import '../services/auth_service.dart';
 import '../services/computer_settings_service.dart';
-import '../services/squad_invitation_storage.dart';
-import '../services/squad_request_notification_sync.dart';
-import '../services/squad_request_storage.dart';
+import '../services/compagnie_invitation_storage.dart';
+import '../services/compagnie_request_notification_sync.dart';
+import '../services/compagnie_request_storage.dart';
 import 'computer_screen.dart';
-import 'squad_phone_screen.dart';
-import 'squad_screen.dart';
+import 'compagnie_phone_screen.dart';
+import 'compagnie_screen.dart';
 
 class HallScreen extends StatefulWidget {
   const HallScreen({super.key});
@@ -18,7 +20,8 @@ class HallScreen extends StatefulWidget {
   State<HallScreen> createState() => _HallScreenState();
 }
 
-class _HallScreenState extends State<HallScreen> {
+class _HallScreenState extends State<HallScreen>
+    with WidgetsBindingObserver {
   // ===========================================================================
   // DIMENSIONS DE RÉFÉRENCE DU HALL
   // ===========================================================================
@@ -28,6 +31,23 @@ class _HallScreenState extends State<HallScreen> {
 
   // Mets true uniquement pour afficher les zones tactiles en rouge.
   static const bool debugTouchZones = false;
+
+  // ===========================================================================
+  // AMBIANCE DYNAMIQUE DU HALL
+  //
+  // Le décor principal reste TOUJOURS hall_background_day.png.
+  // La version nuit n'est visible que dans la baie vitrée.
+  // Ainsi, aucun objet du Hall ne change de place.
+  // ===========================================================================
+
+  DateTime _hallClock = DateTime.now();
+  Timer? _hallClockTimer;
+
+  static const String _dayHallAsset =
+      'assets/images/hall/hall_background_day.png';
+
+  static const String _nightHallAsset =
+      'assets/images/hall/hall_background_night.png';
 
   // ===========================================================================
   // BJORN
@@ -43,7 +63,7 @@ class _HallScreenState extends State<HallScreen> {
   // NOTIFICATIONS / TÉLÉPHONE
   // ===========================================================================
 
-  int _pendingSquadActivityCount = 0;
+  int _pendingCompagnieActivityCount = 0;
 
   int get _unreadNotificationCount {
     if (!ComputerSettingsService
@@ -51,7 +71,7 @@ class _HallScreenState extends State<HallScreen> {
       return 0;
     }
 
-    return _pendingSquadActivityCount;
+    return _pendingCompagnieActivityCount;
   }
 
   // ===========================================================================
@@ -61,6 +81,8 @@ class _HallScreenState extends State<HallScreen> {
   @override
   void initState() {
     super.initState();
+
+    WidgetsBinding.instance.addObserver(this);
 
     SystemChrome.setEnabledSystemUIMode(
       SystemUiMode.edgeToEdge,
@@ -77,9 +99,43 @@ class _HallScreenState extends State<HallScreen> {
 
     WidgetsBinding.instance.addPostFrameCallback(
       (_) {
-        _refreshSquadPhone();
+        _refreshCompagniePhone();
       },
     );
+
+    _hallClockTimer = Timer.periodic(
+      const Duration(minutes: 1),
+      (_) {
+        if (!mounted) {
+          return;
+        }
+
+        setState(() {
+          _hallClock = DateTime.now();
+        });
+      },
+    );
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _hallClockTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(
+    AppLifecycleState state,
+  ) {
+    if (state != AppLifecycleState.resumed ||
+        !mounted) {
+      return;
+    }
+
+    setState(() {
+      _hallClock = DateTime.now();
+    });
   }
 
   // ===========================================================================
@@ -190,8 +246,49 @@ class _HallScreenState extends State<HallScreen> {
 
                         Positioned.fill(
                           child: Image.asset(
-                            'assets/images/hall_background.png',
+                            _dayHallAsset,
                             fit: BoxFit.fill,
+                            filterQuality: FilterQuality.high,
+                          ),
+                        ),
+
+                        // =====================================================
+                        // BAIE VITRÉE DYNAMIQUE
+                        //
+                        // On superpose uniquement l'extérieur nocturne.
+                        // Le cadre, les portails, le comptoir et tous les objets
+                        // restent ceux de l'image de jour.
+                        // =====================================================
+
+                        Positioned.fill(
+                          child: IgnorePointer(
+                            child: TweenAnimationBuilder<double>(
+                              tween: Tween<double>(
+                                end: _nightOpacity(_hallClock),
+                              ),
+                              duration: const Duration(
+                                seconds: 4,
+                              ),
+                              curve: Curves.easeInOutCubic,
+                              builder: (
+                                context,
+                                opacity,
+                                child,
+                              ) {
+                                return Opacity(
+                                  opacity: opacity,
+                                  child: child,
+                                );
+                              },
+                              child: ClipPath(
+                                clipper: const _HallWindowClipper(),
+                                child: Image.asset(
+                                  _nightHallAsset,
+                                  fit: BoxFit.fill,
+                                  filterQuality: FilterQuality.high,
+                                ),
+                              ),
+                            ),
                           ),
                         ),
 
@@ -237,7 +334,40 @@ class _HallScreenState extends State<HallScreen> {
                         ),
 
                         // =====================================================
-                        // PORTAIL MODE SQUAD
+                        // LUMIÈRE DYNAMIQUE DU HALL
+                        // =====================================================
+
+                        Positioned.fill(
+                          child: IgnorePointer(
+                            child: Stack(
+                              children: [
+                                Positioned.fill(
+                                  child: ColoredBox(
+                                    color: const Color(0xff173b69)
+                                        .withValues(
+                                      alpha: 0.20 *
+                                          _nightOpacity(_hallClock),
+                                    ),
+                                  ),
+                                ),
+                                Positioned.fill(
+                                  child: ColoredBox(
+                                    color: const Color(0xffff9b52)
+                                        .withValues(
+                                      alpha: 0.09 *
+                                          _goldenHourOpacity(
+                                            _hallClock,
+                                          ),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+
+                        // =====================================================
+                        // PORTAIL MODE COMPAGNIE
                         // =====================================================
 
                         Positioned(
@@ -247,8 +377,8 @@ class _HallScreenState extends State<HallScreen> {
                           height: 405,
                           child: _TouchZone(
                             debug: debugTouchZones,
-                            label: 'Mode Squad',
-                            onTap: _openSquad,
+                            label: 'Mode Compagnie',
+                            onTap: _openCompagnie,
                           ),
                         ),
 
@@ -374,15 +504,94 @@ class _HallScreenState extends State<HallScreen> {
   }
 
   // ===========================================================================
-  // OUVRIR LE MODE SQUAD
+  // CYCLE JOUR / NUIT
   // ===========================================================================
 
-  Future<void> _openSquad() async {
+  double _minutesOfDay(DateTime time) {
+    return (time.hour * 60) +
+        time.minute +
+        (time.second / 60);
+  }
+
+  double _nightOpacity(DateTime time) {
+    final double minutes = _minutesOfDay(time);
+
+    const double dawnStart = 5.5 * 60; // 05:30
+    const double dawnEnd = 7.5 * 60; // 07:30
+    const double duskStart = 18 * 60; // 18:00
+    const double duskEnd = 20.5 * 60; // 20:30
+
+    if (minutes < dawnStart || minutes >= duskEnd) {
+      return 1;
+    }
+
+    if (minutes >= dawnStart && minutes < dawnEnd) {
+      return 1 -
+          ((minutes - dawnStart) /
+              (dawnEnd - dawnStart));
+    }
+
+    if (minutes >= duskStart && minutes < duskEnd) {
+      return (minutes - duskStart) /
+          (duskEnd - duskStart);
+    }
+
+    return 0;
+  }
+
+  double _goldenHourOpacity(DateTime time) {
+    final double minutes = _minutesOfDay(time);
+
+    const double morningStart = 6 * 60;
+    const double morningPeak = 7 * 60;
+    const double morningEnd = 8 * 60;
+
+    const double eveningStart = 17 * 60;
+    const double eveningPeak = 18.5 * 60;
+    const double eveningEnd = 20 * 60;
+
+    double triangular(
+      double start,
+      double peak,
+      double end,
+    ) {
+      if (minutes <= start || minutes >= end) {
+        return 0;
+      }
+
+      if (minutes <= peak) {
+        return (minutes - start) / (peak - start);
+      }
+
+      return 1 -
+          ((minutes - peak) / (end - peak));
+    }
+
+    final double morning = triangular(
+      morningStart,
+      morningPeak,
+      morningEnd,
+    );
+
+    final double evening = triangular(
+      eveningStart,
+      eveningPeak,
+      eveningEnd,
+    );
+
+    return morning > evening ? morning : evening;
+  }
+
+  // ===========================================================================
+  // OUVRIR LE MODE COMPAGNIE
+  // ===========================================================================
+
+  Future<void> _openCompagnie() async {
     await Navigator.push<void>(
       context,
       MaterialPageRoute<void>(
         builder: (context) =>
-            const SquadScreen(),
+            const CompagnieScreen(),
       ),
     );
 
@@ -390,7 +599,7 @@ class _HallScreenState extends State<HallScreen> {
       return;
     }
 
-    await _refreshSquadPhone();
+    await _refreshCompagniePhone();
   }
 
   // ===========================================================================
@@ -410,7 +619,7 @@ class _HallScreenState extends State<HallScreen> {
       return;
     }
 
-    await _refreshSquadPhone();
+    await _refreshCompagniePhone();
   }
 
   // ===========================================================================
@@ -531,7 +740,7 @@ class _HallScreenState extends State<HallScreen> {
   // SYNCHRONISER LE TÉLÉPHONE
   // ===========================================================================
 
-  Future<void> _refreshSquadPhone() async {
+  Future<void> _refreshCompagniePhone() async {
     try {
       final String? userId =
           await AuthService.getCurrentUserId();
@@ -543,7 +752,7 @@ class _HallScreenState extends State<HallScreen> {
         }
 
         setState(() {
-          _pendingSquadActivityCount = 0;
+          _pendingCompagnieActivityCount = 0;
         });
 
         return;
@@ -551,17 +760,17 @@ class _HallScreenState extends State<HallScreen> {
 
       // Déclenche, si besoin, la vraie notification Android pour
       // les nouvelles demandes reçues.
-      await SquadRequestNotificationSync
+      await CompagnieRequestNotificationSync
           .syncForCurrentUser();
 
       final requests =
-          await SquadRequestStorage
+          await CompagnieRequestStorage
               .pendingIncomingForUser(
         userId.trim(),
       );
 
       final invitations =
-          await SquadInvitationStorage
+          await CompagnieInvitationStorage
               .pendingIncomingForUser(
         userId.trim(),
       );
@@ -571,7 +780,7 @@ class _HallScreenState extends State<HallScreen> {
       }
 
       setState(() {
-        _pendingSquadActivityCount =
+        _pendingCompagnieActivityCount =
             requests.length + invitations.length;
       });
     } catch (_) {
@@ -580,7 +789,7 @@ class _HallScreenState extends State<HallScreen> {
       }
 
       setState(() {
-        _pendingSquadActivityCount = 0;
+        _pendingCompagnieActivityCount = 0;
       });
     }
   }
@@ -611,9 +820,9 @@ class _HallScreenState extends State<HallScreen> {
     AppAudioService.instance
         .notificationFeedback();
 
-    if (_pendingSquadActivityCount > 0) {
+    if (_pendingCompagnieActivityCount > 0) {
       _setBjornMessage(
-        'Ton Communicateur XP contient une nouvelle activité Squad.',
+        'Ton Communicateur XP contient une nouvelle activité Compagnie.',
       );
     } else {
       _setBjornMessage(
@@ -626,7 +835,7 @@ class _HallScreenState extends State<HallScreen> {
       context,
       MaterialPageRoute<void>(
         builder: (context) =>
-            const SquadPhoneScreen(),
+            const CompagniePhoneScreen(),
       ),
     );
 
@@ -634,9 +843,63 @@ class _HallScreenState extends State<HallScreen> {
       return;
     }
 
-    await _refreshSquadPhone();
+    await _refreshCompagniePhone();
   }
 
+}
+
+// =============================================================================
+// MASQUE DE LA BAIE VITRÉE
+//
+// Coordonnées exprimées dans le repère historique du Hall : 941 x 1672.
+// Le masque reste volontairement à l'intérieur du cadre de pierre afin que
+// les petites différences entre les images jour/nuit ne puissent jamais
+// déplacer visuellement le décor intérieur.
+// =============================================================================
+
+class _HallWindowClipper extends CustomClipper<Path> {
+  const _HallWindowClipper();
+
+  @override
+  Path getClip(Size size) {
+    final double sx = size.width / 941;
+    final double sy = size.height / 1672;
+
+    final Path path = Path();
+
+    path.moveTo(326 * sx, 659 * sy);
+    path.lineTo(326 * sx, 376 * sy);
+
+    path.cubicTo(
+      326 * sx,
+      274 * sy,
+      384 * sx,
+      211 * sy,
+      470.5 * sx,
+      211 * sy,
+    );
+
+    path.cubicTo(
+      557 * sx,
+      211 * sy,
+      615 * sx,
+      274 * sy,
+      615 * sx,
+      376 * sy,
+    );
+
+    path.lineTo(615 * sx, 659 * sy);
+    path.close();
+
+    return path;
+  }
+
+  @override
+  bool shouldReclip(
+    covariant _HallWindowClipper oldClipper,
+  ) {
+    return false;
+  }
 }
 
 // =============================================================================

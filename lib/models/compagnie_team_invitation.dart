@@ -1,4 +1,4 @@
-class SquadTeamInvitation {
+class CompagnieTeamInvitation {
   final String id;
 
   final String teamId;
@@ -17,7 +17,7 @@ class SquadTeamInvitation {
   final DateTime createdAt;
   final DateTime? handledAt;
 
-  const SquadTeamInvitation({
+  const CompagnieTeamInvitation({
     required this.id,
     required this.teamId,
     required this.teamName,
@@ -43,14 +43,14 @@ class SquadTeamInvitation {
   bool get isCancelled =>
       status == 'cancelled';
 
-  SquadTeamInvitation copyWith({
+  CompagnieTeamInvitation copyWith({
     String? status,
     String? handledByUserId,
     DateTime? handledAt,
     bool clearHandledBy = false,
     bool clearHandledAt = false,
   }) {
-    return SquadTeamInvitation(
+    return CompagnieTeamInvitation(
       id: id,
       teamId: teamId,
       teamName: teamName,
@@ -92,10 +92,10 @@ class SquadTeamInvitation {
     };
   }
 
-  factory SquadTeamInvitation.fromMap(
+  factory CompagnieTeamInvitation.fromMap(
     Map<String, dynamic> map,
   ) {
-    return SquadTeamInvitation(
+    return CompagnieTeamInvitation(
       id: map['id']?.toString() ?? '',
       teamId:
           map['teamId']?.toString() ?? '',

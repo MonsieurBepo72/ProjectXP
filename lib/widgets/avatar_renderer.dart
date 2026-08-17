@@ -10,7 +10,7 @@ class AvatarRenderer extends StatelessWidget {
   final double size;
   final bool showFrame;
 
-  /// Pour les mini-avatars (Squad / demandes), évite le masque de tête ovale
+  /// Pour les mini-avatars (Compagnie / demandes), évite le masque de tête ovale
   /// et utilise un recadrage rectangulaire transparent.
   ///
   /// Le rendu normal du Profil reste inchangé.

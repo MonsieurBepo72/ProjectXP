@@ -68,10 +68,10 @@ flutter:
   assets:
 
     - assets/images/
+    - assets/images/hall/
     - assets/audio/music/
     - assets/audio/sfx/
 
-    - assets/images/hall_background.png
     - assets/images/hall_extension_top.png
     - assets/images/hall_extension_bottom.png
     - assets/images/bjorn/bjorn_idle.png

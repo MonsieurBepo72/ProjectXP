@@ -10,7 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// - elle rattache l'ancien profil Vieti au bon compte historique ;
 /// - elle rattache l'ancien e-mail au bon ID ;
 /// - elle crée un profil propre pour le compte Isto uniquement s'il n'en a pas ;
-/// - elle ne touche PAS aux avatars, équipes ou demandes Squad.
+/// - elle ne touche PAS aux avatars, équipes ou demandes Compagnie.
 ///
 /// Une fois exécutée avec succès, elle ne se relance plus.
 class LocalAccountRepairService {

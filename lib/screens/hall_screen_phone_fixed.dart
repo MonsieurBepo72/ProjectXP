@@ -1,14 +1,14 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../services/app_audio_service.dart';
 import '../services/auth_service.dart';
 import '../services/computer_settings_service.dart';
-import '../services/squad_request_notification_sync.dart';
-import '../services/squad_request_storage.dart';
+import '../services/compagnie_request_notification_sync.dart';
+import '../services/compagnie_request_storage.dart';
 import 'computer_screen.dart';
-import 'squad_phone_screen.dart';
-import 'squad_screen.dart';
+import 'compagnie_phone_screen.dart';
+import 'compagnie_screen.dart';
 
 class HallScreen extends StatefulWidget {
   const HallScreen({super.key});
@@ -19,7 +19,7 @@ class HallScreen extends StatefulWidget {
 
 class _HallScreenState extends State<HallScreen> {
   // ===========================================================================
-  // DIMENSIONS DE RÉFÉRENCE DU HALL
+  // DIMENSIONS DE RÃ‰FÃ‰RENCE DU HALL
   // ===========================================================================
 
   static const double hallWidth = 941;
@@ -39,10 +39,10 @@ class _HallScreenState extends State<HallScreen> {
   int _dialogueVersion = 0;
 
   // ===========================================================================
-  // NOTIFICATIONS / TÉLÉPHONE
+  // NOTIFICATIONS / TÃ‰LÃ‰PHONE
   // ===========================================================================
 
-  int _pendingSquadRequestCount = 0;
+  int _pendingCompagnieRequestCount = 0;
 
   int get _unreadNotificationCount {
     if (!ComputerSettingsService
@@ -50,7 +50,7 @@ class _HallScreenState extends State<HallScreen> {
       return 0;
     }
 
-    return _pendingSquadRequestCount;
+    return _pendingCompagnieRequestCount;
   }
 
   // ===========================================================================
@@ -76,7 +76,7 @@ class _HallScreenState extends State<HallScreen> {
 
     WidgetsBinding.instance.addPostFrameCallback(
       (_) {
-        _refreshSquadPhone();
+        _refreshCompagniePhone();
       },
     );
   }
@@ -115,7 +115,7 @@ class _HallScreenState extends State<HallScreen> {
             fit: StackFit.expand,
             children: [
               // ===============================================================
-              // FOND DE SÉCURITÉ
+              // FOND DE SÃ‰CURITÃ‰
               // ===============================================================
 
               const DecoratedBox(
@@ -189,7 +189,7 @@ class _HallScreenState extends State<HallScreen> {
 
                         Positioned.fill(
                           child: Image.asset(
-                            'assets/images/hall_background.png',
+                            'assets/images/hall/hall_background_day.png',
                             fit: BoxFit.fill,
                           ),
                         ),
@@ -218,7 +218,7 @@ class _HallScreenState extends State<HallScreen> {
                         ),
 
                         // ===========================================================
-                        // ÉCRAN DU PC - PREMIER PLAN DEVANT BJORN
+                        // Ã‰CRAN DU PC - PREMIER PLAN DEVANT BJORN
                         // ===========================================================
 
                         Positioned(
@@ -236,7 +236,7 @@ class _HallScreenState extends State<HallScreen> {
                         ),
 
                         // =====================================================
-                        // PORTAIL MODE SQUAD
+                        // PORTAIL MODE COMPAGNIE
                         // =====================================================
 
                         Positioned(
@@ -246,8 +246,8 @@ class _HallScreenState extends State<HallScreen> {
                           height: 405,
                           child: _TouchZone(
                             debug: debugTouchZones,
-                            label: 'Mode Squad',
-                            onTap: _openSquad,
+                            label: 'Mode Compagnie',
+                            onTap: _openCompagnie,
                           ),
                         ),
 
@@ -262,11 +262,11 @@ class _HallScreenState extends State<HallScreen> {
                           height: 405,
                           child: _TouchZone(
                             debug: debugTouchZones,
-                            label: 'Portail verrouillé',
+                            label: 'Portail verrouillÃ©',
                             onTap: () {
                               _setBjornMessage(
-                                'Hmm... Ce portail reste scellé.\n'
-                                'Même moi, j’ignore encore ce qui se cache derrière.',
+                                'Hmm... Ce portail reste scellÃ©.\n'
+                                'MÃªme moi, jâ€™ignore encore ce qui se cache derriÃ¨re.',
                               );
                             },
                           ),
@@ -289,7 +289,7 @@ class _HallScreenState extends State<HallScreen> {
                         ),
 
                         // =====================================================
-                        // TÉLÉPHONE - NOTIFICATIONS
+                        // TÃ‰LÃ‰PHONE - NOTIFICATIONS
                         // =====================================================
 
                         Positioned(
@@ -373,15 +373,15 @@ class _HallScreenState extends State<HallScreen> {
   }
 
   // ===========================================================================
-  // OUVRIR LE MODE SQUAD
+  // OUVRIR LE MODE COMPAGNIE
   // ===========================================================================
 
-  Future<void> _openSquad() async {
+  Future<void> _openCompagnie() async {
     await Navigator.push<void>(
       context,
       MaterialPageRoute<void>(
         builder: (context) =>
-            const SquadScreen(),
+            const CompagnieScreen(),
       ),
     );
 
@@ -389,7 +389,7 @@ class _HallScreenState extends State<HallScreen> {
       return;
     }
 
-    await _refreshSquadPhone();
+    await _refreshCompagniePhone();
   }
 
   // ===========================================================================
@@ -409,7 +409,7 @@ class _HallScreenState extends State<HallScreen> {
       return;
     }
 
-    await _refreshSquadPhone();
+    await _refreshCompagniePhone();
   }
 
   // ===========================================================================
@@ -419,7 +419,7 @@ class _HallScreenState extends State<HallScreen> {
   void _openTavern() {
     _setBjornMessage(
       'Ah, le registre de la Taverne...\n'
-      'C’est ici que les aventuriers se retrouvent.',
+      'Câ€™est ici que les aventuriers se retrouvent.',
     );
   }
 
@@ -527,10 +527,10 @@ class _HallScreenState extends State<HallScreen> {
   }
 
   // ===========================================================================
-  // SYNCHRONISER LE TÉLÉPHONE
+  // SYNCHRONISER LE TÃ‰LÃ‰PHONE
   // ===========================================================================
 
-  Future<void> _refreshSquadPhone() async {
+  Future<void> _refreshCompagniePhone() async {
     try {
       final String? userId =
           await AuthService.getCurrentUserId();
@@ -542,19 +542,19 @@ class _HallScreenState extends State<HallScreen> {
         }
 
         setState(() {
-          _pendingSquadRequestCount = 0;
+          _pendingCompagnieRequestCount = 0;
         });
 
         return;
       }
 
-      // Déclenche, si besoin, la vraie notification Android pour
-      // les nouvelles demandes reçues.
-      await SquadRequestNotificationSync
+      // DÃ©clenche, si besoin, la vraie notification Android pour
+      // les nouvelles demandes reÃ§ues.
+      await CompagnieRequestNotificationSync
           .syncForCurrentUser();
 
       final requests =
-          await SquadRequestStorage
+          await CompagnieRequestStorage
               .pendingIncomingForUser(
         userId.trim(),
       );
@@ -564,7 +564,7 @@ class _HallScreenState extends State<HallScreen> {
       }
 
       setState(() {
-        _pendingSquadRequestCount =
+        _pendingCompagnieRequestCount =
             requests.length;
       });
     } catch (_) {
@@ -573,13 +573,13 @@ class _HallScreenState extends State<HallScreen> {
       }
 
       setState(() {
-        _pendingSquadRequestCount = 0;
+        _pendingCompagnieRequestCount = 0;
       });
     }
   }
 
   // ===========================================================================
-  // OUVRIR LE TÉLÉPHONE
+  // OUVRIR LE TÃ‰LÃ‰PHONE
   // ===========================================================================
 
   Future<void> _openNotifications() async {
@@ -587,13 +587,13 @@ class _HallScreenState extends State<HallScreen> {
         .current.notificationsEnabled) {
       _setBjornMessage(
         'Ton Communicateur XP est silencieux.\n'
-        'Les notifications sont désactivées dans le Terminal.',
+        'Les notifications sont dÃ©sactivÃ©es dans le Terminal.',
       );
 
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
-            'Notifications désactivées dans les paramètres.',
+            'Notifications dÃ©sactivÃ©es dans les paramÃ¨tres.',
           ),
         ),
       );
@@ -604,13 +604,13 @@ class _HallScreenState extends State<HallScreen> {
     AppAudioService.instance
         .notificationFeedback();
 
-    if (_pendingSquadRequestCount > 0) {
+    if (_pendingCompagnieRequestCount > 0) {
       _setBjornMessage(
-        'On dirait que quelqu’un cherche à rejoindre ton Squad.',
+        'On dirait que quelquâ€™un cherche Ã  rejoindre ton Compagnie.',
       );
     } else {
       _setBjornMessage(
-        'Ton Communicateur XP est prêt.\n'
+        'Ton Communicateur XP est prÃªt.\n'
         'Aucune nouvelle demande pour le moment.',
       );
     }
@@ -619,7 +619,7 @@ class _HallScreenState extends State<HallScreen> {
       context,
       MaterialPageRoute<void>(
         builder: (context) =>
-            const SquadPhoneScreen(),
+            const CompagniePhoneScreen(),
       ),
     );
 
@@ -627,7 +627,7 @@ class _HallScreenState extends State<HallScreen> {
       return;
     }
 
-    await _refreshSquadPhone();
+    await _refreshCompagniePhone();
   }
 
 }
@@ -670,3 +670,4 @@ class _TouchZone extends StatelessWidget {
     );
   }
 }
+

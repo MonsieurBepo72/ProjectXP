@@ -798,7 +798,7 @@ class _ProfileScreenState
                 ),
                 label:
                     const Text(
-                  'Retour au Squad',
+                  'Retour au Compagnie',
                 ),
                 style:
                     TextButton.styleFrom(

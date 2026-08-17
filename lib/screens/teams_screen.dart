@@ -267,7 +267,7 @@ class _TeamsScreenState
       ),
       children: [
         const Text(
-          'Tes Squads',
+          'Tes Compagnies',
           textAlign:
               TextAlign.center,
           style:
@@ -660,7 +660,7 @@ class _TeamsScreenState
         ),
 
         const Text(
-          'Crée ton premier Squad ou rejoins une équipe depuis « Trouver une équipe ».',
+          'Crée ton premier Compagnie ou rejoins une équipe depuis « Trouver une équipe ».',
           textAlign:
               TextAlign.center,
           style:

@@ -3,17 +3,17 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import '../models/avatar_model.dart';
-import '../models/squad_team_invitation.dart';
+import '../models/compagnie_team_invitation.dart';
 import '../models/team_model.dart';
 import '../services/auth_service.dart';
 import '../services/avatar_storage.dart';
-import '../services/squad_invitation_storage.dart';
-import '../services/squad_request_storage.dart';
+import '../services/compagnie_invitation_storage.dart';
+import '../services/compagnie_request_storage.dart';
 import '../services/team_storage.dart';
 import '../widgets/avatar_renderer.dart';
 import 'create_team_screen.dart';
 import 'public_profile_screen.dart';
-import 'squad_phone_screen.dart';
+import 'compagnie_phone_screen.dart';
 
 class TeamDetailsScreen
     extends StatefulWidget {
@@ -101,11 +101,11 @@ class _TeamDetailsScreenState
           widget.currentUserId,
         )) {
       final pendingRequests =
-          await SquadRequestStorage
+          await CompagnieRequestStorage
               .pendingForTeam(team.id);
 
       final pendingInvitations =
-          await SquadInvitationStorage
+          await CompagnieInvitationStorage
               .pendingForTeam(team.id);
 
       pendingJoinRequestCount =
@@ -697,12 +697,12 @@ class _TeamDetailsScreenState
   // INVITATIONS / RECRUTEMENT
   // ===========================================================================
 
-  Future<void> _openSquadPhone() async {
+  Future<void> _openCompagniePhone() async {
     await Navigator.push<void>(
       context,
       MaterialPageRoute<void>(
         builder: (context) =>
-            const SquadPhoneScreen(),
+            const CompagniePhoneScreen(),
       ),
     );
 
@@ -773,13 +773,13 @@ class _TeamDetailsScreenState
                 ),
       );
 
-    final List<SquadTeamInvitation>
+    final List<CompagnieTeamInvitation>
         pendingInvitations =
-        await SquadInvitationStorage
+        await CompagnieInvitationStorage
             .pendingForTeam(team.id);
 
     final pendingRequests =
-        await SquadRequestStorage
+        await CompagnieRequestStorage
             .pendingForTeam(team.id);
 
     final Set<String> pendingInviteeIds =
@@ -1045,8 +1045,8 @@ class _TeamDetailsScreenState
                 ?.trim() ??
             widget.currentUsername.trim();
 
-    final SquadInvitationCreateResult result =
-        await SquadInvitationStorage
+    final CompagnieInvitationCreateResult result =
+        await CompagnieInvitationStorage
             .createInvitation(
       team: team,
       inviterId: widget.currentUserId,
@@ -1064,38 +1064,38 @@ class _TeamDetailsScreenState
     });
 
     switch (result) {
-      case SquadInvitationCreateResult.success:
+      case CompagnieInvitationCreateResult.success:
         _showMessage(
           'Invitation envoyée à $inviteeName.',
         );
         await _loadTeam();
         return;
 
-      case SquadInvitationCreateResult.alreadyPending:
+      case CompagnieInvitationCreateResult.alreadyPending:
         _showMessage(
           'Une invitation est déjà en attente pour $inviteeName.',
         );
         return;
 
-      case SquadInvitationCreateResult.alreadyMember:
+      case CompagnieInvitationCreateResult.alreadyMember:
         _showMessage(
           '$inviteeName fait déjà partie de l’équipe.',
         );
         return;
 
-      case SquadInvitationCreateResult.teamFull:
+      case CompagnieInvitationCreateResult.teamFull:
         _showMessage(
           'L’équipe est complète.',
         );
         return;
 
-      case SquadInvitationCreateResult.notAllowed:
+      case CompagnieInvitationCreateResult.notAllowed:
         _showMessage(
           'Tu n’as plus les droits pour inviter dans cette équipe.',
         );
         return;
 
-      case SquadInvitationCreateResult.invalid:
+      case CompagnieInvitationCreateResult.invalid:
         _showMessage(
           'Impossible d’envoyer cette invitation.',
         );
@@ -1739,7 +1739,7 @@ class _TeamDetailsScreenState
                     ),
                     const SizedBox(width: 9),
                     IconButton.outlined(
-                      onPressed: _openSquadPhone,
+                      onPressed: _openCompagniePhone,
                       tooltip: 'Ouvrir le Communicateur XP',
                       icon: Badge(
                         isLabelVisible:

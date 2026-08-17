@@ -1,15 +1,15 @@
 import 'app_notification_service.dart';
 import 'auth_service.dart';
 import 'computer_settings_service.dart';
-import 'squad_request_storage.dart';
+import 'compagnie_request_storage.dart';
 
-class SquadRequestNotificationSync {
-  const SquadRequestNotificationSync._();
+class CompagnieRequestNotificationSync {
+  const CompagnieRequestNotificationSync._();
 
   /// À appeler quand le Hall devient visible.
   ///
   /// Si le compte connecté a reçu une nouvelle demande
-  /// de Squad, Android reçoit une vraie notification,
+  /// de Compagnie, Android reçoit une vraie notification,
   /// une seule fois par demande.
   static Future<void> syncForCurrentUser() async {
     if (!ComputerSettingsService
@@ -35,7 +35,7 @@ class SquadRequestNotificationSync {
     }
 
     final requests =
-        await SquadRequestStorage
+        await CompagnieRequestStorage
             .pendingIncomingForUser(
       userId,
     );
@@ -50,14 +50,14 @@ class SquadRequestNotificationSync {
           .instance
           .show(
         title:
-            'Nouvelle demande Squad',
+            'Nouvelle demande Compagnie',
         body:
             '${request.requesterName} souhaite rejoindre ${request.teamName}.',
         payload:
-            'squad_join_request:${request.id}',
+            'compagnie_join_request:${request.id}',
       );
 
-      await SquadRequestStorage
+      await CompagnieRequestStorage
           .markAndroidNotified(
         requestId: request.id,
         userId: userId,

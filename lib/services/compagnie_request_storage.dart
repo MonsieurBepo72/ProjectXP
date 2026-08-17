@@ -2,32 +2,50 @@ import 'dart:convert';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../models/squad_join_request.dart';
+import '../models/compagnie_join_request.dart';
 import '../models/team_model.dart';
 import 'auth_service.dart';
-import 'squad_invitation_storage.dart';
+import 'compagnie_invitation_storage.dart';
 import 'team_storage.dart';
 
-class SquadRequestStorage {
+class CompagnieRequestStorage {
   static const String _storageKey =
+      'project_xp_compagnie_join_requests';
+
+  // Compatibilite : copie une seule fois les anciennes donnees Squad.
+  static const String _legacyStorageKey =
       'project_xp_squad_join_requests';
 
   // ===========================================================================
   // CHARGEMENT / SAUVEGARDE
   // ===========================================================================
 
-  static Future<List<SquadJoinRequest>>
+  static Future<List<CompagnieJoinRequest>>
       loadAll() async {
     final SharedPreferences prefs =
         await SharedPreferences
             .getInstance();
 
-    final String? raw =
+    String? raw =
         prefs.getString(_storageKey);
+
+    if (raw == null || raw.isEmpty) {
+      final String? legacyRaw =
+          prefs.getString(_legacyStorageKey);
+
+      if (legacyRaw != null && legacyRaw.isNotEmpty) {
+        await prefs.setString(
+          _storageKey,
+          legacyRaw,
+        );
+
+        raw = legacyRaw;
+      }
+    }
 
     if (raw == null ||
         raw.isEmpty) {
-      return <SquadJoinRequest>[];
+      return <CompagnieJoinRequest>[];
     }
 
     try {
@@ -35,14 +53,14 @@ class SquadRequestStorage {
           jsonDecode(raw);
 
       if (decoded is! List) {
-        return <SquadJoinRequest>[];
+        return <CompagnieJoinRequest>[];
       }
 
       return decoded
           .whereType<Map>()
           .map(
             (item) =>
-                SquadJoinRequest
+                CompagnieJoinRequest
                     .fromMap(
               Map<String, dynamic>.from(
                 item,
@@ -51,12 +69,12 @@ class SquadRequestStorage {
           )
           .toList();
     } catch (_) {
-      return <SquadJoinRequest>[];
+      return <CompagnieJoinRequest>[];
     }
   }
 
   static Future<bool> _saveAll(
-    List<SquadJoinRequest> requests,
+    List<CompagnieJoinRequest> requests,
   ) async {
     final SharedPreferences prefs =
         await SharedPreferences
@@ -96,7 +114,7 @@ class SquadRequestStorage {
     }
 
     final bool invitationPending =
-        await SquadInvitationStorage
+        await CompagnieInvitationStorage
             .hasPendingInvitation(
       teamId: team.id,
       inviteeId: requesterId,
@@ -106,7 +124,7 @@ class SquadRequestStorage {
       return false;
     }
 
-    final List<SquadJoinRequest>
+    final List<CompagnieJoinRequest>
         requests =
         await loadAll();
 
@@ -155,8 +173,8 @@ class SquadRequestStorage {
           'Joueur';
     }
 
-    final SquadJoinRequest request =
-        SquadJoinRequest(
+    final CompagnieJoinRequest request =
+        CompagnieJoinRequest(
       id: DateTime.now()
           .microsecondsSinceEpoch
           .toString(),
@@ -183,15 +201,15 @@ class SquadRequestStorage {
   // LECTURE
   // ===========================================================================
 
-  static Future<List<SquadJoinRequest>>
+  static Future<List<CompagnieJoinRequest>>
       incomingForUser(
     String userId,
   ) async {
-    final List<SquadJoinRequest>
+    final List<CompagnieJoinRequest>
         requests =
         await loadAll();
 
-    final List<SquadJoinRequest> result =
+    final List<CompagnieJoinRequest> result =
         requests
             .where(
               (request) =>
@@ -210,11 +228,11 @@ class SquadRequestStorage {
     return result;
   }
 
-  static Future<List<SquadJoinRequest>>
+  static Future<List<CompagnieJoinRequest>>
       pendingIncomingForUser(
     String userId,
   ) async {
-    final List<SquadJoinRequest> all =
+    final List<CompagnieJoinRequest> all =
         await incomingForUser(
       userId,
     );
@@ -227,15 +245,15 @@ class SquadRequestStorage {
         .toList();
   }
 
-  static Future<List<SquadJoinRequest>>
+  static Future<List<CompagnieJoinRequest>>
       outgoingForUser(
     String userId,
   ) async {
-    final List<SquadJoinRequest>
+    final List<CompagnieJoinRequest>
         requests =
         await loadAll();
 
-    final List<SquadJoinRequest> result =
+    final List<CompagnieJoinRequest> result =
         requests
             .where(
               (request) =>
@@ -254,14 +272,14 @@ class SquadRequestStorage {
     return result;
   }
 
-  static Future<List<SquadJoinRequest>>
+  static Future<List<CompagnieJoinRequest>>
       pendingForTeam(
     String teamId,
   ) async {
-    final List<SquadJoinRequest> requests =
+    final List<CompagnieJoinRequest> requests =
         await loadAll();
 
-    final List<SquadJoinRequest> result =
+    final List<CompagnieJoinRequest> result =
         requests
             .where(
               (request) =>
@@ -282,7 +300,7 @@ class SquadRequestStorage {
     required String teamId,
     required String requesterId,
   }) async {
-    final List<SquadJoinRequest>
+    final List<CompagnieJoinRequest>
         requests =
         await loadAll();
 
@@ -303,7 +321,7 @@ class SquadRequestStorage {
     required String requestId,
     required String handlerUserId,
   }) async {
-    final List<SquadJoinRequest>
+    final List<CompagnieJoinRequest>
         requests =
         await loadAll();
 
@@ -317,7 +335,7 @@ class SquadRequestStorage {
       return false;
     }
 
-    final SquadJoinRequest request =
+    final CompagnieJoinRequest request =
         requests[index];
 
     if (!request.isPending ||
@@ -374,7 +392,7 @@ class SquadRequestStorage {
       return false;
     }
 
-    await SquadInvitationStorage
+    await CompagnieInvitationStorage
         .closePendingAsAccepted(
       teamId: request.teamId,
       inviteeId: request.requesterId,
@@ -392,7 +410,7 @@ class SquadRequestStorage {
     required String requestId,
     required String handlerUserId,
   }) async {
-    final List<SquadJoinRequest>
+    final List<CompagnieJoinRequest>
         requests =
         await loadAll();
 
@@ -406,7 +424,7 @@ class SquadRequestStorage {
       return false;
     }
 
-    final SquadJoinRequest request =
+    final CompagnieJoinRequest request =
         requests[index];
 
     if (!request.isPending ||
@@ -435,7 +453,7 @@ class SquadRequestStorage {
     required String requestId,
     required String userId,
   }) async {
-    final List<SquadJoinRequest>
+    final List<CompagnieJoinRequest>
         requests =
         await loadAll();
 
@@ -449,7 +467,7 @@ class SquadRequestStorage {
       return false;
     }
 
-    final SquadJoinRequest request =
+    final CompagnieJoinRequest request =
         requests[index];
 
     if (request.androidNotifiedUserIds

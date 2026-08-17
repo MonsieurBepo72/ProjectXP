@@ -3,8 +3,8 @@ import 'package:flutter/material.dart';
 import 'find_team_screen.dart';
 import 'teams_screen.dart';
 
-class SquadScreen extends StatelessWidget {
-  const SquadScreen({
+class CompagnieScreen extends StatelessWidget {
+  const CompagnieScreen({
     super.key,
   });
 
@@ -31,7 +31,7 @@ class SquadScreen extends StatelessWidget {
         foregroundColor: _gold,
         centerTitle: true,
         title: const Text(
-          'SQUAD',
+          'COMPAGNIE',
           style: TextStyle(
             fontWeight: FontWeight.bold,
             letterSpacing: 2,
@@ -93,7 +93,7 @@ class SquadScreen extends StatelessWidget {
                       height: 12,
                     ),
                     Text(
-                      'PORTAIL SQUAD',
+                      'PORTAIL COMPAGNIE',
                       textAlign:
                           TextAlign.center,
                       style:
@@ -110,7 +110,7 @@ class SquadScreen extends StatelessWidget {
                       height: 8,
                     ),
                     Text(
-                      'Trouve une équipe, gère tes Squads ou rencontre de nouveaux joueurs.',
+                      'Trouve une équipe, gère tes Compagnies ou rencontre de nouveaux joueurs.',
                       textAlign:
                           TextAlign.center,
                       style:
@@ -129,12 +129,12 @@ class SquadScreen extends StatelessWidget {
                 height: 26,
               ),
 
-              _SquadMenuCard(
+              _CompagnieMenuCard(
                 icon: Icons.search,
                 title:
                     'TROUVER UNE ÉQUIPE',
                 subtitle:
-                    'Recherche un Squad qui recrute selon tes jeux et plateformes.',
+                    'Recherche un Compagnie qui recrute selon tes jeux et plateformes.',
                 onTap: () {
                   Navigator.push<void>(
                     context,
@@ -151,13 +151,13 @@ class SquadScreen extends StatelessWidget {
                 height: 14,
               ),
 
-              _SquadMenuCard(
+              _CompagnieMenuCard(
                 icon:
                     Icons.shield_outlined,
                 title:
                     'MES ÉQUIPES',
                 subtitle:
-                    'Crée une équipe et gère les Squads dont tu fais partie.',
+                    'Crée une équipe et gère les Compagnies dont tu fais partie.',
                 onTap: () {
                   Navigator.push<void>(
                     context,
@@ -174,7 +174,7 @@ class SquadScreen extends StatelessWidget {
                 height: 14,
               ),
 
-              _SquadMenuCard(
+              _CompagnieMenuCard(
                 icon:
                     Icons.people_alt_outlined,
                 title:
@@ -251,14 +251,14 @@ class SquadScreen extends StatelessWidget {
   }
 }
 
-class _SquadMenuCard
+class _CompagnieMenuCard
     extends StatelessWidget {
   final IconData icon;
   final String title;
   final String subtitle;
   final VoidCallback onTap;
 
-  const _SquadMenuCard({
+  const _CompagnieMenuCard({
     required this.icon,
     required this.title,
     required this.subtitle,
@@ -473,7 +473,7 @@ class _FindPlayersComingSoonScreen
                       8,
                 ),
                 Text(
-                  'Nous brancherons ici les profils publics, les filtres par jeux, plateformes et disponibilités, puis l’invitation dans un Squad.',
+                  'Nous brancherons ici les profils publics, les filtres par jeux, plateformes et disponibilités, puis l’invitation dans un Compagnie.',
                   textAlign:
                       TextAlign.center,
                   style:
