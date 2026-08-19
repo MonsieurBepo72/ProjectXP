@@ -20,113 +20,205 @@ class SplashScreen extends StatefulWidget {
 class _SplashScreenState
     extends State<SplashScreen>
     with SingleTickerProviderStateMixin {
+  // ===========================================================================
+  // DURÉES VISUELLES
+  //
+  // Ces valeurs reprennent exactement le rythme de l'IntroSplashScreen actuel.
+  //
+  // Intro actuelle :
+  // 100000 ms au total
+  //
+  // 20 % → apparition
+  // 55 % → maintien
+  // 25 % → disparition
+  //
+  // Donc :
+  // 20 % de 100000 = 20000 ms
+  // ===========================================================================
+
+  static const Duration _splashDuration =
+      Duration(
+    milliseconds: 4000,
+  );
+
+  static const Duration _nextScreenFadeDuration =
+      Duration(
+    milliseconds: 2000,
+  );
+
+  // ===========================================================================
+  // ANIMATIONS
+  // ===========================================================================
+
   late final AnimationController _controller;
 
   late final Animation<double> _fadeAnimation;
-
   late final Animation<double> _scaleAnimation;
+
+  bool _navigationStarted = false;
+
+  // ===========================================================================
+  // INITIALISATION
+  // ===========================================================================
 
   @override
   void initState() {
     super.initState();
 
-    // ============================================================
-    // ANIMATION DU LOGO
-    // ============================================================
-
     _controller = AnimationController(
       vsync: this,
-      duration: const Duration(
-        milliseconds: 1000,
-      ),
+      duration: _splashDuration,
     );
 
-    _fadeAnimation = CurvedAnimation(
-      parent: _controller,
-      curve: Curves.easeOut,
+    // =========================================================================
+    // FONDU
+    //
+    // EXACTEMENT LE MÊME RYTHME QUE L'INTRO :
+    //
+    // 20 % :
+    // noir → Splash
+    //
+    // 55 % :
+    // Splash complètement visible
+    //
+    // 25 % :
+    // Splash → noir
+    // =========================================================================
+
+    _fadeAnimation = TweenSequence<double>(
+      [
+        TweenSequenceItem<double>(
+          tween: Tween<double>(
+            begin: 0.0,
+            end: 1.0,
+          ).chain(
+            CurveTween(
+              curve: Curves.easeOut,
+            ),
+          ),
+          weight: 20,
+        ),
+
+        TweenSequenceItem<double>(
+          tween: ConstantTween<double>(
+            1.0,
+          ),
+          weight: 55,
+        ),
+
+        TweenSequenceItem<double>(
+          tween: Tween<double>(
+            begin: 1.0,
+            end: 0.0,
+          ).chain(
+            CurveTween(
+              curve: Curves.easeIn,
+            ),
+          ),
+          weight: 25,
+        ),
+      ],
+    ).animate(
+      _controller,
     );
+
+    // =========================================================================
+    // LÉGER ZOOM
+    //
+    // Même principe que l'intro :
+    //
+    // 100 % → 104 %
+    //
+    // sur toute la durée.
+    // =========================================================================
 
     _scaleAnimation = Tween<double>(
-      begin: 0.88,
-      end: 1.0,
+      begin: 1.0,
+      end: 1.04,
     ).animate(
       CurvedAnimation(
         parent: _controller,
-        curve: Curves.easeOutBack,
+        curve: Curves.easeInOut,
       ),
     );
-
-    _controller.forward();
 
     _startSplash();
   }
 
-  // ==============================================================
-  // DÉMARRAGE
-  // ==============================================================
+  // ===========================================================================
+  // DÉMARRAGE DU SPLASH
+  // ===========================================================================
 
   Future<void> _startSplash() async {
-    // On lance la vérification de session
-    // pendant que le Splash est affiché.
+    // On commence immédiatement à déterminer
+    // où le joueur devra aller.
+    //
+    // La vérification se fait donc pendant
+    // l'animation du Splash.
     final Future<Widget> destinationFuture =
         _getDestination();
 
-    // Durée minimum du Splash.
-    final Future<void> minimumSplashTime =
-        Future.delayed(
-      const Duration(
-        milliseconds: 2400,
-      ),
-    );
-
-    final List<dynamic> results =
-        await Future.wait([
-      destinationFuture,
-      minimumSplashTime,
-    ]);
+    // On lance le cycle visuel complet :
+    //
+    // noir
+    // → Splash
+    // → maintien
+    // → noir
+    await _controller.forward();
 
     if (!mounted) {
       return;
     }
 
+    // Normalement la destination sera déjà connue
+    // depuis longtemps.
+    //
+    // Mais on attend quand même proprement le résultat
+    // au cas où une opération prendrait exceptionnellement
+    // plus de temps.
     final Widget destination =
-        results[0] as Widget;
+        await destinationFuture;
 
-    _openNextScreen(
+    if (!mounted) {
+      return;
+    }
+
+    await _openNextScreen(
       destination,
     );
   }
 
-  // ==============================================================
-  // CHOIX DE L'ÉCRAN SUIVANT
-  // ==============================================================
+  // ===========================================================================
+  // DÉTERMINER LA DESTINATION
+  // ===========================================================================
 
   Future<Widget> _getDestination() async {
+    // -------------------------------------------------------------------------
+    // CONNEXION
+    // -------------------------------------------------------------------------
+
     final bool isLoggedIn =
         await AuthService.isLoggedIn();
-
-    // ------------------------------------------------------------
-    // PAS CONNECTÉ
-    // ------------------------------------------------------------
 
     if (!isLoggedIn) {
       return const AuthScreen();
     }
 
-    // ------------------------------------------------------------
-    // CONNECTÉ
-    // ------------------------------------------------------------
+    // -------------------------------------------------------------------------
+    // UTILISATEUR
+    // -------------------------------------------------------------------------
 
     final String? userId =
         await AuthService.getCurrentUserId();
 
-    if (userId == null) {
+    if (userId == null ||
+        userId.trim().isEmpty) {
       return const AuthScreen();
     }
 
-    // ------------------------------------------------------------
-    // VÉRIFICATION AVATAR
-    // ------------------------------------------------------------
+    // -------------------------------------------------------------------------
+    // AVATAR
+    // -------------------------------------------------------------------------
 
     final bool hasAvatar =
         await AvatarStorage.hasAvatar(
@@ -137,26 +229,52 @@ class _SplashScreenState
       return const AvatarChoiceScreen();
     }
 
-    // ------------------------------------------------------------
-    // TOUT EST OK
-    // ------------------------------------------------------------
+    // -------------------------------------------------------------------------
+    // HALL
+    // -------------------------------------------------------------------------
 
     return const HallScreen();
   }
 
-  // ==============================================================
-  // TRANSITION VERS L'ÉCRAN SUIVANT
-  // ==============================================================
+  // ===========================================================================
+  // OUVERTURE DE L'ÉCRAN SUIVANT
+  //
+  // À ce moment précis :
+  //
+  // le Splash est déjà devenu complètement noir.
+  //
+  // L'écran suivant apparaît alors progressivement
+  // depuis ce noir avec :
+  //
+  // durée = 20 % de la durée de l'intro
+  //       = 20000 ms
+  //
+  // courbe = easeOut
+  //
+  // C'est donc la même sensation que :
+  //
+  // noir → Intro
+  // =========================================================================
 
-  void _openNextScreen(
+  Future<void> _openNextScreen(
     Widget destination,
-  ) {
-    Navigator.of(context).pushReplacement(
-      PageRouteBuilder(
+  ) async {
+    if (_navigationStarted) {
+      return;
+    }
+
+    _navigationStarted = true;
+
+    if (!mounted) {
+      return;
+    }
+
+    await Navigator.of(context).pushReplacement(
+      PageRouteBuilder<void>(
         transitionDuration:
-            const Duration(
-          milliseconds: 450,
-        ),
+            _nextScreenFadeDuration,
+        reverseTransitionDuration:
+            _nextScreenFadeDuration,
 
         pageBuilder: (
           context,
@@ -172,8 +290,14 @@ class _SplashScreenState
           secondaryAnimation,
           child,
         ) {
+          final Animation<double> fadeAnimation =
+              CurvedAnimation(
+            parent: animation,
+            curve: Curves.easeOut,
+          );
+
           return FadeTransition(
-            opacity: animation,
+            opacity: fadeAnimation,
             child: child,
           );
         },
@@ -181,181 +305,179 @@ class _SplashScreenState
     );
   }
 
-  // ==============================================================
+  // ===========================================================================
   // BUILD
-  // ==============================================================
+  // ===========================================================================
 
   @override
   Widget build(
     BuildContext context,
   ) {
     return Scaffold(
-      backgroundColor:
-          const Color(0xff160e09),
+      // Fond noir permanent.
+      //
+      // Lorsque le contenu du Splash devient transparent,
+      // c'est donc naturellement le noir qui apparaît.
+      backgroundColor: Colors.black,
 
-      body: SafeArea(
-        child: Stack(
-          children: [
-            // =====================================================
-            // LÉGER HALO CENTRAL
-            // =====================================================
+      body: FadeTransition(
+        opacity: _fadeAnimation,
 
-            Center(
-              child: Container(
-                width: 280,
-                height: 280,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  boxShadow: [
-                    BoxShadow(
-                      color:
-                          const Color(
-                        0xffffc857,
-                      ).withValues(
-                        alpha: 0.08,
-                      ),
-                      blurRadius: 90,
-                      spreadRadius: 25,
-                    ),
-                  ],
-                ),
-              ),
+        child: ScaleTransition(
+          scale: _scaleAnimation,
+
+          child: ColoredBox(
+            color: const Color(
+              0xff160e09,
             ),
 
-            // =====================================================
-            // LOGO
-            // =====================================================
+            child: SafeArea(
+              child: Stack(
+                children: [
+                  // ===========================================================
+                  // HALO CENTRAL
+                  // ===========================================================
 
-            Center(
-              child: FadeTransition(
-                opacity:
-                    _fadeAnimation,
-
-                child: ScaleTransition(
-                  scale:
-                      _scaleAnimation,
-
-                  child: Column(
-                    mainAxisSize:
-                        MainAxisSize.min,
-
-                    children: [
-                      // =============================================
-                      // LOGO PROJECT XP
-                      // =============================================
-
-                      Image.asset(
-                        'assets/images/logo_project_xp.png',
-
-                        width: 250,
-
-                        fit:
-                            BoxFit.contain,
-
-                        errorBuilder: (
-                          context,
-                          error,
-                          stackTrace,
-                        ) {
-                          // Sécurité si le logo
-                          // n'est pas encore au bon emplacement.
-                          return const Text(
-                            'PROJECT XP',
-                            textAlign:
-                                TextAlign.center,
-                            style:
-                                TextStyle(
-                              color:
-                                  Color(
-                                0xffffc857,
-                              ),
-                              fontSize: 42,
-                              fontWeight:
-                                  FontWeight.bold,
-                              letterSpacing:
-                                  4,
+                  Center(
+                    child: Container(
+                      width: 280,
+                      height: 280,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        boxShadow: [
+                          BoxShadow(
+                            color: const Color(
+                              0xffffc857,
+                            ).withValues(
+                              alpha: 0.08,
                             ),
-                          );
-                        },
+                            blurRadius: 90,
+                            spreadRadius: 25,
+                          ),
+                        ],
                       ),
+                    ),
+                  ),
 
-                      const SizedBox(
-                        height: 22,
-                      ),
+                  // ===========================================================
+                  // CONTENU PRINCIPAL
+                  // ===========================================================
 
-                      const Text(
-                        'TON AVENTURE COMMENCE ICI',
+                  Center(
+                    child: Column(
+                      mainAxisSize:
+                          MainAxisSize.min,
+                      children: [
+                        // =====================================================
+                        // LOGO PROJECT XP
+                        // =====================================================
 
-                        textAlign:
-                            TextAlign.center,
+                        Image.asset(
+                          'assets/images/logo_project_xp.png',
+                          width: 250,
+                          fit: BoxFit.contain,
+                          filterQuality:
+                              FilterQuality.high,
 
-                        style: TextStyle(
-                          color:
-                              Colors.white70,
-                          fontSize: 12,
-                          fontWeight:
-                              FontWeight.w600,
-                          letterSpacing:
-                              2.2,
+                          errorBuilder: (
+                            context,
+                            error,
+                            stackTrace,
+                          ) {
+                            return const Text(
+                              'PROJECT XP',
+                              textAlign:
+                                  TextAlign.center,
+                              style: TextStyle(
+                                color: Color(
+                                  0xffffc857,
+                                ),
+                                fontSize: 42,
+                                fontWeight:
+                                    FontWeight.bold,
+                                letterSpacing: 4,
+                              ),
+                            );
+                          },
                         ),
-                      ),
 
-                      const SizedBox(
-                        height: 32,
-                      ),
+                        const SizedBox(
+                          height: 22,
+                        ),
 
-                      // =============================================
-                      // PETIT CHARGEMENT
-                      // =============================================
+                        // =====================================================
+                        // SOUS-TITRE
+                        // =====================================================
 
-                      const SizedBox(
-                        width: 22,
-                        height: 22,
-                        child:
-                            CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color:
-                              Color(
-                            0xffffc857,
+                        const Text(
+                          'TON AVENTURE COMMENCE ICI',
+                          textAlign:
+                              TextAlign.center,
+                          style: TextStyle(
+                            color: Colors.white70,
+                            fontSize: 12,
+                            fontWeight:
+                                FontWeight.w600,
+                            letterSpacing: 2.2,
                           ),
                         ),
-                      ),
-                    ],
+
+                        const SizedBox(
+                          height: 32,
+                        ),
+
+                        // =====================================================
+                        // CHARGEMENT
+                        // =====================================================
+
+                        const SizedBox(
+                          width: 22,
+                          height: 22,
+                          child:
+                              CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Color(
+                              0xffffc857,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                ),
+
+                  // ===========================================================
+                  // SIGNATURE BASSE
+                  // ===========================================================
+
+                  const Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 24,
+                    child: Text(
+                      'PROJECT XP',
+                      textAlign:
+                          TextAlign.center,
+                      style: TextStyle(
+                        color: Colors.white24,
+                        fontSize: 10,
+                        fontWeight:
+                            FontWeight.w600,
+                        letterSpacing: 2,
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
-
-            // =====================================================
-            // VERSION / SIGNATURE
-            // =====================================================
-
-            const Positioned(
-              left: 0,
-              right: 0,
-              bottom: 24,
-              child: Text(
-                'PROJECT XP',
-
-                textAlign:
-                    TextAlign.center,
-
-                style: TextStyle(
-                  color:
-                      Colors.white24,
-                  fontSize: 10,
-                  fontWeight:
-                      FontWeight.w600,
-                  letterSpacing:
-                      2,
-                ),
-              ),
-            ),
-          ],
+          ),
         ),
       ),
     );
   }
+
+  // ===========================================================================
+  // NETTOYAGE
+  // ===========================================================================
 
   @override
   void dispose() {
