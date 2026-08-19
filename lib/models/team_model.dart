@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+
 class TeamModel {
   final String id;
 
@@ -34,16 +36,17 @@ class TeamModel {
   /// Identifiants uniques des membres.
   ///
   /// Le propriétaire doit toujours être présent.
+  // TODO: Enforcer l'invariant ownerId ∈ memberIds (constructeur + fromMap)
   final List<String> memberIds;
 
   final DateTime createdAt;
 
-  const TeamModel({
+  TeamModel({
     required this.id,
     required this.name,
     required this.description,
-    required this.games,
-    required this.platforms,
+    required List<String> games,
+    required List<String> platforms,
     required this.maxMembers,
     this.recruitmentOpen = true,
     required this.ownerId,
@@ -51,9 +54,11 @@ class TeamModel {
     required this.leaderId,
     required this.leaderName,
     required this.imagePath,
-    required this.memberIds,
+    required List<String> memberIds,
     required this.createdAt,
-  });
+  }) : games = List.unmodifiable(games),
+       platforms = List.unmodifiable(platforms),
+       memberIds = List.unmodifiable(memberIds);
 
   // ===========================================================================
   // COPIE
@@ -83,8 +88,8 @@ class TeamModel {
       id: id,
       name: name ?? this.name,
       description: description ?? this.description,
-      games: games ?? this.games,
-      platforms: platforms ?? this.platforms,
+      games: games != null ? List.unmodifiable(games) : this.games,
+      platforms: platforms != null ? List.unmodifiable(platforms) : this.platforms,
       maxMembers: maxMembers ?? this.maxMembers,
       recruitmentOpen:
           recruitmentOpen ?? this.recruitmentOpen,
@@ -96,7 +101,7 @@ class TeamModel {
           clearLeader ? null : leaderName ?? this.leaderName,
       imagePath:
           clearImagePath ? null : imagePath ?? this.imagePath,
-      memberIds: memberIds ?? this.memberIds,
+      memberIds: memberIds != null ? List.unmodifiable(memberIds) : this.memberIds,
       createdAt: createdAt,
     );
   }
@@ -131,9 +136,33 @@ class TeamModel {
   factory TeamModel.fromMap(
     Map<String, dynamic> map,
   ) {
+    final id = map['id']?.toString() ?? '';
+    final name = map['name']?.toString() ?? '';
+    final createdAt = DateTime.tryParse(
+          map['createdAt']?.toString() ?? '',
+        ) ??
+        DateTime.fromMillisecondsSinceEpoch(0);
+    final maxMembers = map['maxMembers'] is int
+        ? map['maxMembers'] as int
+        : 5;
+
+    if (id.isEmpty) {
+      debugPrint('⚠️ TeamModel.fromMap: id vide ou manquant');
+    }
+    if (name.isEmpty) {
+      debugPrint('⚠️ TeamModel.fromMap: nom vide ou manquant');
+    }
+    if (map['createdAt'] == null ||
+        DateTime.tryParse(map['createdAt']?.toString() ?? '') == null) {
+      debugPrint('⚠️ TeamModel.fromMap: createdAt vide ou invalide');
+    }
+    if (map['maxMembers'] is! int) {
+      debugPrint('⚠️ TeamModel.fromMap: maxMembers manquant ou invalide, valeur par défaut 5');
+    }
+
     return TeamModel(
-      id: map['id']?.toString() ?? '',
-      name: map['name']?.toString() ?? '',
+      id: id,
+      name: name,
       description:
           map['description']?.toString() ?? '',
       games: map['games'] is List
@@ -150,17 +179,11 @@ class TeamModel {
               ),
             )
           : [],
-      maxMembers: map['maxMembers'] is int
-          ? map['maxMembers'] as int
-          : 5,
-
-      // Compatibilité avec les équipes déjà enregistrées
-      // avant l'ajout du recrutement.
+      maxMembers: maxMembers,
       recruitmentOpen:
           map['recruitmentOpen'] is bool
               ? map['recruitmentOpen'] as bool
               : true,
-
       ownerId:
           map['ownerId']?.toString() ?? '',
       ownerName:
@@ -178,11 +201,7 @@ class TeamModel {
               ),
             )
           : [],
-      createdAt:
-          DateTime.tryParse(
-            map['createdAt']?.toString() ?? '',
-          ) ??
-          DateTime.now(),
+      createdAt: createdAt,
     );
   }
 
@@ -225,6 +244,7 @@ class TeamModel {
     return isMember(userId);
   }
 
+  // TODO: Déplacer dans la couche UI/localization — les labels français n'ont rien à faire dans le modèle
   String roleLabelFor(
     String userId,
   ) {

@@ -11,6 +11,37 @@ import 'package:project_xp/services/session_service.dart';
 import 'package:project_xp/widgets/avatar_renderer.dart';
 import 'package:project_xp/widgets/brand_icon.dart';
 
+
+
+Brand _brandFromString(String value) {
+  final String normalized = value.trim().toLowerCase();
+  switch (normalized) {
+    case 'apple':
+    case 'ios':
+    case 'iphone':
+    case 'ipad':
+      return Brand.apple;
+    case 'discord':
+      return Brand.discord;
+    case 'google':
+    case 'android':
+      return Brand.google;
+    case 'steam':
+    case 'steam deck':
+      return Brand.steam;
+    case 'twitch':
+      return Brand.twitch;
+    case 'xbox':
+    case 'xbox one':
+    case 'xbox series x/s':
+      return Brand.xbox;
+    default:
+      // BrandIcon supports brands only; use a stable generic fallback for
+      // arbitrary game/platform/network labels.
+      return Brand.google;
+  }
+}
+
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({
     super.key,
@@ -26,16 +57,13 @@ class _ProfileScreenState
   bool _profileLoaded = false;
   AvatarModel? _avatar;
 
-  String pseudo = 'Mon aventurier';
+  // TODO: Récupérer depuis le service de profil utilisateur
+  String pseudo = '';
 
-  String description =
-      "Je cherche des compagnons pour partir à l'aventure !";
+  // TODO: Récupérer depuis le service de profil utilisateur
+  String description = '';
 
-  final List<String> jeux = [
-    'Minecraft',
-    'Fortnite',
-    'Rocket League',
-  ];
+  final List<String> jeux = []; // Chargé depuis ProfileStorage
 
   final List<Map<String, String>>
       toutesLesPlateformes = [
@@ -81,52 +109,20 @@ class _ProfileScreenState
     },
   ];
 
-  final List<Map<String, String>> plateformes = [
-    {
-      'nom': 'PC',
-      'logo': 'pc',
-    },
-    {
-      'nom': 'PlayStation 5',
-      'logo': 'playstation',
-    },
-  ];
+  // TODO: Remplacer par un service de catalogue de plateformes
+  final List<Map<String, String>> plateformes = []; // Chargé depuis ProfileStorage
 
   final Map<String, List<String>> disponibilites = {
-    'Lundi': [
-      '20h -> 23h',
-    ],
-    'Mardi': [
-      '20h -> 23h',
-    ],
+    'Lundi': [],
+    'Mardi': [],
     'Mercredi': [],
-    'Jeudi': [
-      '20h -> 23h',
-    ],
-    'Vendredi': [
-      '21h -> 00h',
-    ],
+    'Jeudi': [],
+    'Vendredi': [],
     'Samedi': [],
     'Dimanche': [],
   };
 
-  final List<Map<String, String>> reseaux = [
-    {
-      'nom': 'Discord',
-      'pseudo': 'MonDiscord',
-      'visibilite': 'Prive',
-    },
-    {
-      'nom': 'PlayStation',
-      'pseudo': 'MonPSN',
-      'visibilite': 'Visible',
-    },
-    {
-      'nom': 'Steam',
-      'pseudo': 'MonSteam',
-      'visibilite': 'Visible',
-    },
-  ];
+  final List<Map<String, String>> reseaux = []; // Chargé depuis ProfileStorage
 
   static const List<String> _jours = [
     'Lundi',
@@ -548,8 +544,9 @@ class _ProfileScreenState
                 height: 8,
               ),
 
+              // TODO: Récupérer depuis le service de progression utilisateur
               const Text(
-                'Niveau 1 - Aventurier',
+                'Niveau ? - Aventurier',
                 style: TextStyle(
                   color:
                       Colors.white70,
@@ -1139,6 +1136,7 @@ class _ProfileScreenState
       'Helldivers 2',
     ];
 
+    // TODO: Remplacer par un service de catalogue de jeux
     showDialog<void>(
       context: context,
       builder: (dialogContext) {
@@ -1259,7 +1257,7 @@ class _ProfileScreenState
                                 child:
                                     BrandIcon(
                                   brand:
-                                      game,
+                                      _brandFromString(game),
                                   size:
                                       24,
                                 ),
@@ -1503,7 +1501,7 @@ class _ProfileScreenState
                           children: [
                             BrandIcon(
                               brand:
-                                  name,
+                                  _brandFromString(platform['logo'] ?? name),
                               size: 24,
                             ),
                             const SizedBox(
@@ -1669,7 +1667,7 @@ class _ProfileScreenState
                           setPopupState(
                             () {
                               slots.add(
-                                '20h -> 23h',
+                                '20h -> 23h', // TODO: Remplacer par un time picker ou une constante configurable
                               );
                             },
                           );
@@ -2198,6 +2196,7 @@ class _ProfileScreenState
                             Colors.amber,
                       ),
                     ),
+                    // TODO: Remplacer par un service de catalogue de réseaux supportés
                     items: const [
                       DropdownMenuItem(
                         value:
@@ -2970,7 +2969,7 @@ class _NetworkCard
             child: Center(
               child:
                   BrandIcon(
-                brand: name,
+                brand: _brandFromString(name),
                 size: 24,
               ),
             ),

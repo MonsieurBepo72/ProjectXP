@@ -6,6 +6,37 @@ import '../services/profile_storage.dart';
 import '../widgets/avatar_renderer.dart';
 import '../widgets/brand_icon.dart';
 
+
+
+Brand _brandFromString(String value) {
+  final String normalized = value.trim().toLowerCase();
+  switch (normalized) {
+    case 'apple':
+    case 'ios':
+    case 'iphone':
+    case 'ipad':
+      return Brand.apple;
+    case 'discord':
+      return Brand.discord;
+    case 'google':
+    case 'android':
+      return Brand.google;
+    case 'steam':
+    case 'steam deck':
+      return Brand.steam;
+    case 'twitch':
+      return Brand.twitch;
+    case 'xbox':
+    case 'xbox one':
+    case 'xbox series x/s':
+      return Brand.xbox;
+    default:
+      // BrandIcon supports brands only; use a stable generic fallback for
+      // arbitrary game/platform/network labels.
+      return Brand.google;
+  }
+}
+
 class PublicProfileScreen
     extends StatefulWidget {
   final String userId;
@@ -404,7 +435,7 @@ class _PublicProfileScreenState
           return _PublicChip(
             label: game,
             leading: BrandIcon(
-              brand: game,
+              brand: _brandFromString(game),
               size: 18,
             ),
           );
@@ -434,7 +465,7 @@ class _PublicProfileScreenState
           return _PublicChip(
             label: name,
             leading: BrandIcon(
-              brand: name,
+              brand: _brandFromString(name),
               size: 18,
             ),
           );
@@ -536,7 +567,7 @@ class _PublicProfileScreenState
                   height: 36,
                   child: Center(
                     child: BrandIcon(
-                      brand: name,
+                      brand: _brandFromString(name),
                       size: 22,
                     ),
                   ),
