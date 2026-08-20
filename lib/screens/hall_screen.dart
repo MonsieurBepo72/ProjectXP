@@ -13,6 +13,7 @@ import '../services/compagnie_request_storage.dart';
 import 'computer_screen.dart';
 import 'compagnie_phone_screen.dart';
 import 'compagnie_screen.dart';
+import 'tavern_screen.dart';
 
 class HallScreen extends StatefulWidget {
   const HallScreen({
@@ -767,11 +768,20 @@ class _HallScreenState extends State<HallScreen>
   // MODE TAVERNE
   // ===========================================================================
 
-  void _openTavern() {
-    _setBjornMessage(
-      'Ah, le registre de la Taverne...\n'
-      'C’est ici que les aventuriers se retrouvent.',
+  Future<void> _openTavern() async {
+    await Navigator.push<void>(
+      context,
+      MaterialPageRoute<void>(
+        builder: (context) =>
+            const TavernScreen(),
+      ),
     );
+
+    if (!mounted) {
+      return;
+    }
+
+    await _refreshCompagniePhone();
   }
 
   // ===========================================================================
