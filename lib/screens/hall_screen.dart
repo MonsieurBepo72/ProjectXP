@@ -10,8 +10,9 @@ import '../services/computer_settings_service.dart';
 import '../services/compagnie_invitation_storage.dart';
 import '../services/compagnie_request_notification_sync.dart';
 import '../services/compagnie_request_storage.dart';
+import '../services/online_presence_service.dart';
 import 'computer_screen.dart';
-import 'compagnie_phone_screen.dart';
+import 'phone_home_screen.dart';
 import 'compagnie_screen.dart';
 import 'tavern_screen.dart';
 
@@ -139,6 +140,10 @@ class _HallScreenState extends State<HallScreen>
 
     WidgetsBinding.instance.addObserver(this);
 
+    unawaited(
+      OnlinePresenceService.instance.start(),
+    );
+
     SystemChrome.setEnabledSystemUIMode(
       SystemUiMode.edgeToEdge,
     );
@@ -178,6 +183,10 @@ class _HallScreenState extends State<HallScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _hallClockTimer?.cancel();
+
+    unawaited(
+      OnlinePresenceService.instance.stop(),
+    );
 
     super.dispose();
   }
@@ -548,7 +557,7 @@ class _HallScreenState extends State<HallScreen>
                     ),
 
                     // =========================================================
-                    // TÉLÉPHONE / NOTIFICATIONS
+                    // TÉLÉPHONE / COMMUNICATEUR XP
                     // =========================================================
 
                     Positioned(
@@ -562,8 +571,8 @@ class _HallScreenState extends State<HallScreen>
                           Positioned.fill(
                             child: _TouchZone(
                               debug: debugTouchZones,
-                              label: 'Notifications',
-                              onTap: _openNotifications,
+                              label: 'Communicateur XP',
+                              onTap: _openPhone,
                             ),
                           ),
 
@@ -975,38 +984,24 @@ class _HallScreenState extends State<HallScreen>
   }
 
   // ===========================================================================
-  // NOTIFICATIONS
+  // COMMUNICATEUR XP
+  //
+  // Le téléphone reste toujours accessible, même lorsque les notifications
+  // sont désactivées dans le Terminal. Ce réglage ne doit pas bloquer l'accès
+  // aux Messages, Amis, Demandes et autres applications du téléphone.
   // ===========================================================================
 
-  Future<void> _openNotifications() async {
-    if (!ComputerSettingsService
-        .current.notificationsEnabled) {
-      _setBjornMessage(
-        'Ton Communicateur XP est silencieux.\n'
-        'Les notifications sont désactivées dans le Terminal.',
-      );
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Notifications désactivées dans les paramètres.',
-          ),
-        ),
-      );
-
-      return;
-    }
-
+  Future<void> _openPhone() async {
     AppAudioService.instance.notificationFeedback();
 
-    if (_pendingCompagnieActivityCount > 0) {
+    if (_pendingCompagnieActivityCount > 0 &&
+        ComputerSettingsService.current.notificationsEnabled) {
       _setBjornMessage(
         'Ton Communicateur XP contient une nouvelle activité Compagnie.',
       );
     } else {
       _setBjornMessage(
-        'Ton Communicateur XP est prêt.\n'
-        'Aucune nouvelle demande ou invitation pour le moment.',
+        'Ton Communicateur XP est prêt.',
       );
     }
 
@@ -1014,7 +1009,7 @@ class _HallScreenState extends State<HallScreen>
       context,
       MaterialPageRoute<void>(
         builder: (context) =>
-            const CompagniePhoneScreen(),
+            const PhoneHomeScreen(),
       ),
     );
 

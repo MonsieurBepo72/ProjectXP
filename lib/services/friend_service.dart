@@ -211,6 +211,56 @@ class FriendService {
   }
 
   // ===========================================================================
+  // COMPTEUR TEMPS RÉEL DES DEMANDES REÇUES
+  //
+  // Le stream écoute toutes les lignes friend_requests dont l'utilisateur
+  // courant est le destinataire, puis compte uniquement celles encore pending.
+  //
+  // La table friend_requests doit être présente dans supabase_realtime.
+  // ===========================================================================
+
+  static Stream<int> incomingRequestCountStream() {
+    final String? userId =
+        currentUserId;
+
+    if (userId == null ||
+        userId.isEmpty) {
+      return Stream<int>.value(
+        0,
+      );
+    }
+
+    return SupabaseService.client
+        .from('friend_requests')
+        .stream(
+          primaryKey: [
+            'id',
+          ],
+        )
+        .eq(
+          'receiver_id',
+          userId,
+        )
+        .map(
+          (
+            List<Map<String, dynamic>> rows,
+          ) {
+            int count = 0;
+
+            for (final Map<String, dynamic> row
+                in rows) {
+              if (row['status']?.toString() ==
+                  'pending') {
+                count++;
+              }
+            }
+
+            return count;
+          },
+        );
+  }
+
+  // ===========================================================================
   // DEMANDES REÇUES
   //
   // Chaque ligne contient également :

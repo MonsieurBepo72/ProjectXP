@@ -76,7 +76,9 @@ class _AvatarPreviewScreenState
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(
+    BuildContext context,
+  ) {
     final bool isTest =
         !widget.saveOnValidate;
 
@@ -97,141 +99,177 @@ class _AvatarPreviewScreenState
       ),
       body: SafeArea(
         top: false,
-        child: Padding(
-          padding:
-              const EdgeInsets.fromLTRB(
-            24,
-            20,
-            24,
-            30,
-          ),
-          child: Column(
-            children: [
-              Text(
-                isTest
-                    ? 'MODE DEV'
-                    : 'VOICI TON AVENTURIER',
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  color:
-                      Color(0xffffc857),
-                  fontSize: 24,
-                  fontWeight:
-                      FontWeight.bold,
-                  letterSpacing: 1,
-                ),
+        child: LayoutBuilder(
+          builder: (
+            BuildContext context,
+            BoxConstraints constraints,
+          ) {
+            final bool compact =
+                constraints.maxHeight < 650;
+
+            return Padding(
+              padding: EdgeInsets.fromLTRB(
+                24,
+                compact ? 10 : 20,
+                24,
+                compact ? 14 : 30,
               ),
-
-              const SizedBox(height: 8),
-
-              Text(
-                isTest
-                    ? 'Pour le moment, ta photo est utilisée comme résultat de test. '
-                        'Ton avatar actuel ne sera pas remplacé.'
-                    : 'Tu pourras modifier ton avatar plus tard depuis ton profil.',
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  color: Colors.white60,
-                  fontSize: 14,
-                  height: 1.4,
-                ),
-              ),
-
-              const Spacer(),
-
-              AvatarRenderer(
-                avatar: widget.avatar,
-                size: 285,
-              ),
-
-              const Spacer(),
-
-              SizedBox(
-                width: double.infinity,
-                height: 54,
-                child: OutlinedButton.icon(
-                  onPressed: _saving
-                      ? null
-                      : () {
-                          Navigator.pop(
-                            context,
-                          );
-                        },
-                  icon: const Icon(
-                    Icons.edit,
-                  ),
-                  label: const Text(
-                    'MODIFIER',
-                  ),
-                  style:
-                      OutlinedButton.styleFrom(
-                    foregroundColor:
-                        const Color(
-                      0xffffc857,
-                    ),
-                    side:
-                        const BorderSide(
-                      color:
-                          Color(
+              child: Column(
+                children: [
+                  Text(
+                    isTest
+                        ? 'MODE DEV'
+                        : 'VOICI TON AVENTURIER',
+                    textAlign:
+                        TextAlign.center,
+                    style: TextStyle(
+                      color: const Color(
                         0xffffc857,
+                      ),
+                      fontSize:
+                          compact ? 21 : 24,
+                      fontWeight:
+                          FontWeight.bold,
+                      letterSpacing: 1,
+                    ),
+                  ),
+
+                  SizedBox(
+                    height: compact ? 5 : 8,
+                  ),
+
+                  Text(
+                    isTest
+                        ? 'Pour le moment, ta photo est utilisée comme résultat de test. '
+                            'Ton avatar actuel ne sera pas remplacé.'
+                        : 'Tu pourras modifier ton avatar plus tard depuis ton profil.',
+                    textAlign:
+                        TextAlign.center,
+                    style: TextStyle(
+                      color: Colors.white60,
+                      fontSize:
+                          compact ? 13 : 14,
+                      height: 1.35,
+                    ),
+                  ),
+
+                  SizedBox(
+                    height: compact ? 8 : 12,
+                  ),
+
+                  Expanded(
+                    child: Center(
+                      child: FittedBox(
+                        fit: BoxFit.contain,
+                        child: AvatarRenderer(
+                          avatar:
+                              widget.avatar,
+                          size: 285,
+                        ),
                       ),
                     ),
                   ),
-                ),
-              ),
 
-              const SizedBox(height: 12),
+                  SizedBox(
+                    height: compact ? 8 : 14,
+                  ),
 
-              SizedBox(
-                width: double.infinity,
-                height: 56,
-                child: ElevatedButton.icon(
-                  onPressed: _saving
-                      ? null
-                      : _validateAvatar,
-                  icon: _saving
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child:
-                              CircularProgressIndicator(
-                            strokeWidth: 3,
-                          ),
-                        )
-                      : Icon(
-                          isTest
-                              ? Icons
-                                  .check
-                              : Icons
-                                  .check_circle,
+                  SizedBox(
+                    width:
+                        double.infinity,
+                    height:
+                        compact ? 50 : 54,
+                    child:
+                        OutlinedButton.icon(
+                      onPressed: _saving
+                          ? null
+                          : () {
+                              Navigator.pop(
+                                context,
+                              );
+                            },
+                      icon: const Icon(
+                        Icons.edit,
+                      ),
+                      label: const Text(
+                        'MODIFIER',
+                      ),
+                      style:
+                          OutlinedButton.styleFrom(
+                        foregroundColor:
+                            const Color(
+                          0xffffc857,
                         ),
-                  label: Text(
-                    _saving
-                        ? 'CHARGEMENT...'
-                        : isTest
-                            ? 'TERMINER LE TEST'
-                            : 'VALIDER MON AVATAR',
-                    style: const TextStyle(
-                      fontWeight:
-                          FontWeight.bold,
-                      letterSpacing: 0.8,
+                        side:
+                            const BorderSide(
+                          color: Color(
+                            0xffffc857,
+                          ),
+                        ),
+                      ),
                     ),
                   ),
-                  style:
-                      ElevatedButton.styleFrom(
-                    backgroundColor:
-                        const Color(
-                      0xffffc857,
-                    ),
-                    foregroundColor:
-                        const Color(
-                      0xff21150e,
+
+                  SizedBox(
+                    height: compact ? 8 : 12,
+                  ),
+
+                  SizedBox(
+                    width:
+                        double.infinity,
+                    height:
+                        compact ? 52 : 56,
+                    child:
+                        ElevatedButton.icon(
+                      onPressed: _saving
+                          ? null
+                          : _validateAvatar,
+                      icon: _saving
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child:
+                                  CircularProgressIndicator(
+                                strokeWidth: 3,
+                              ),
+                            )
+                          : Icon(
+                              isTest
+                                  ? Icons.check
+                                  : Icons
+                                      .check_circle,
+                            ),
+                      label: Text(
+                        _saving
+                            ? 'CHARGEMENT...'
+                            : isTest
+                                ? 'TERMINER LE TEST'
+                                : 'VALIDER MON AVATAR',
+                        style:
+                            const TextStyle(
+                          fontWeight:
+                              FontWeight.bold,
+                          letterSpacing:
+                              0.8,
+                        ),
+                      ),
+                      style:
+                          ElevatedButton.styleFrom(
+                        backgroundColor:
+                            const Color(
+                          0xffffc857,
+                        ),
+                        foregroundColor:
+                            const Color(
+                          0xff21150e,
+                        ),
+                      ),
                     ),
                   ),
-                ),
+                ],
               ),
-            ],
-          ),
+            );
+          },
         ),
       ),
     );

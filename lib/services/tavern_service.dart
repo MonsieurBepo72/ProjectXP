@@ -83,6 +83,13 @@ class TavernService {
 
   // ===========================================================================
   // MESSAGES
+  //
+  // La Taverne ne charge que les 50 messages les plus récents du channel.
+  // Supabase conserve au maximum 200 messages par channel grâce au trigger SQL.
+  //
+  // Les messages sont récupérés du plus récent au plus ancien pour appliquer
+  // LIMIT 50, puis _deduplicateMessages() les remet dans l'ordre chronologique
+  // avant affichage.
   // ===========================================================================
 
   static Future<List<Map<String, dynamic>>> getMessages(
@@ -98,10 +105,10 @@ class TavernService {
             )
             .order(
               'created_at',
-              ascending: true,
+              ascending: false,
             )
             .limit(
-              100,
+              50,
             );
 
     final List<Map<String, dynamic>> messages =
@@ -164,8 +171,12 @@ class TavernService {
   // TEMPS RÉEL
   //
   // Le Stream Supabase est créé une seule fois par channel côté écran.
-  // On protège aussi l'affichage contre les doublons temporaires en ne
-  // conservant qu'une ligne par ID de message.
+  //
+  // IMPORTANT :
+  // - seuls les 50 messages les plus récents sont chargés ;
+  // - les nouveaux messages arrivent en Realtime ;
+  // - le 51e plus ancien sort automatiquement de la fenêtre des 50 ;
+  // - _deduplicateMessages() protège toujours contre les doublons temporaires.
   // ===========================================================================
 
   static Stream<List<Map<String, dynamic>>> messageStream(
@@ -184,7 +195,10 @@ class TavernService {
         )
         .order(
           'created_at',
-          ascending: true,
+          ascending: false,
+        )
+        .limit(
+          50,
         )
         .asyncMap(
           (rows) async {

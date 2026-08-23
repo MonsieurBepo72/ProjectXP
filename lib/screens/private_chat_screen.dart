@@ -450,83 +450,199 @@ class _PrivateChatScreenState
       message['created_at'],
     );
 
-    return Align(
-      alignment: isMine
-          ? Alignment.centerRight
-          : Alignment.centerLeft,
-      child: Container(
-        constraints: BoxConstraints(
-          maxWidth:
-              MediaQuery.sizeOf(context).width *
-                  0.78,
+    final Widget bubble =
+        Container(
+      constraints: BoxConstraints(
+        maxWidth:
+            MediaQuery.sizeOf(context).width *
+                0.70,
+      ),
+      padding: const EdgeInsets.fromLTRB(
+        13,
+        9,
+        13,
+        7,
+      ),
+      decoration: BoxDecoration(
+        color: isMine
+            ? const Color(
+                0xff73451f,
+              )
+            : const Color(
+                0xff2a1c14,
+              ),
+        borderRadius: BorderRadius.only(
+          topLeft: const Radius.circular(
+            16,
+          ),
+          topRight: const Radius.circular(
+            16,
+          ),
+          bottomLeft: Radius.circular(
+            isMine ? 16 : 4,
+          ),
+          bottomRight: Radius.circular(
+            isMine ? 4 : 16,
+          ),
         ),
-        margin: const EdgeInsets.only(
-          bottom: 9,
-        ),
-        padding: const EdgeInsets.fromLTRB(
-          13,
-          9,
-          13,
-          7,
-        ),
-        decoration: BoxDecoration(
+        border: Border.all(
           color: isMine
               ? const Color(
-                  0xff73451f,
+                  0xffa86d32,
                 )
               : const Color(
-                  0xff2a1c14,
+                  0xff4f3321,
                 ),
-          borderRadius: BorderRadius.only(
-            topLeft: const Radius.circular(
-              16,
-            ),
-            topRight: const Radius.circular(
-              16,
-            ),
-            bottomLeft: Radius.circular(
-              isMine ? 16 : 4,
-            ),
-            bottomRight: Radius.circular(
-              isMine ? 4 : 16,
-            ),
-          ),
-          border: Border.all(
-            color: isMine
-                ? const Color(
-                    0xffa86d32,
-                  )
-                : const Color(
-                    0xff4f3321,
-                  ),
-          ),
         ),
-        child: Column(
-          crossAxisAlignment: isMine
-              ? CrossAxisAlignment.end
-              : CrossAxisAlignment.start,
-          children: [
-            Text(
-              content,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 14,
-                height: 1.35,
-              ),
+      ),
+      child: Column(
+        crossAxisAlignment: isMine
+            ? CrossAxisAlignment.end
+            : CrossAxisAlignment.start,
+        children: [
+          Text(
+            content,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 14,
+              height: 1.35,
             ),
+          ),
+
+          const SizedBox(
+            height: 4,
+          ),
+
+          Text(
+            time,
+            style: const TextStyle(
+              color: Colors.white38,
+              fontSize: 9,
+            ),
+          ),
+        ],
+      ),
+    );
+
+    return Padding(
+      padding: const EdgeInsets.only(
+        bottom: 9,
+      ),
+      child: Row(
+        mainAxisAlignment: isMine
+            ? MainAxisAlignment.end
+            : MainAxisAlignment.start,
+        crossAxisAlignment:
+            CrossAxisAlignment.end,
+        children: [
+          if (!isMine) ...[
+            _buildMessageAvatar(),
 
             const SizedBox(
-              height: 4,
-            ),
-
-            Text(
-              time,
-              style: const TextStyle(
-                color: Colors.white38,
-                fontSize: 9,
-              ),
+              width: 7,
             ),
           ],
+
+          Flexible(
+            child: bubble,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMessageAvatar() {
+    const double size = 30;
+
+    final String avatarUrl =
+        widget.avatarUrl?.trim() ?? '';
+
+    if (avatarUrl.isNotEmpty) {
+      return ClipOval(
+        child: SizedBox(
+          width: size,
+          height: size,
+          child: Image.network(
+            avatarUrl,
+            fit: BoxFit.cover,
+            errorBuilder: (
+              context,
+              error,
+              stackTrace,
+            ) {
+              return _buildCircularAvatarFallback(
+                size,
+              );
+            },
+          ),
+        ),
+      );
+    }
+
+    final AvatarModel? avatar =
+        _buildManualAvatar();
+
+    if (avatar == null) {
+      return _buildCircularAvatarFallback(
+        size,
+      );
+    }
+
+    return ClipOval(
+      child: SizedBox(
+        width: size,
+        height: size,
+        child: OverflowBox(
+          alignment: Alignment.topCenter,
+          minWidth: size,
+          maxWidth: size,
+          minHeight: size * 1.5,
+          maxHeight: size * 1.5,
+          child: AvatarRenderer(
+            avatar: avatar,
+            size: size,
+            showFrame: false,
+            compactHeadCrop: true,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCircularAvatarFallback(
+    double size,
+  ) {
+    final String cleanName =
+        widget.displayName.trim();
+
+    final String initial =
+        cleanName.isEmpty
+            ? '?'
+            : cleanName
+                .substring(
+                  0,
+                  1,
+                )
+                .toUpperCase();
+
+    return Container(
+      width: size,
+      height: size,
+      alignment: Alignment.center,
+      decoration: const BoxDecoration(
+        color: Color(
+          0xff5b3a20,
+        ),
+        shape: BoxShape.circle,
+      ),
+      child: Text(
+        initial,
+        style: const TextStyle(
+          color: Color(
+            0xffffd27a,
+          ),
+          fontSize: 12,
+          fontWeight: FontWeight.bold,
         ),
       ),
     );

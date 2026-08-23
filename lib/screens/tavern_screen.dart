@@ -4,6 +4,7 @@ import '../models/avatar_model.dart';
 import 'friend_requests_screen.dart';
 import 'friends_screen.dart';
 import '../services/friend_service.dart';
+import '../services/online_presence_service.dart';
 import '../services/supabase_service.dart';
 import '../services/tavern_service.dart';
 import '../widgets/avatar_renderer.dart';
@@ -27,7 +28,6 @@ class _TavernScreenState extends State<TavernScreen> {
   bool _loadingChannels = true;
   bool _sendingMessage = false;
 
-  int _incomingFriendRequestCount = 0;
 
   String? _errorMessage;
 
@@ -42,7 +42,6 @@ class _TavernScreenState extends State<TavernScreen> {
   void initState() {
     super.initState();
     _loadChannels();
-    _refreshFriendRequests();
   }
 
   @override
@@ -205,22 +204,8 @@ class _TavernScreenState extends State<TavernScreen> {
   }
 
   // ===========================================================================
-  // DEMANDES D'AMI
+  // AMIS / DEMANDES D'AMI
   // ===========================================================================
-
-  Future<void> _refreshFriendRequests() async {
-    final List<Map<String, dynamic>> requests =
-        await FriendService.getIncomingRequests();
-
-    if (!mounted) {
-      return;
-    }
-
-    setState(() {
-      _incomingFriendRequestCount =
-          requests.length;
-    });
-  }
 
   Future<void> _openFriends() async {
     await Navigator.push<void>(
@@ -232,12 +217,6 @@ class _TavernScreenState extends State<TavernScreen> {
             const FriendsScreen(),
       ),
     );
-
-    if (!mounted) {
-      return;
-    }
-
-    await _refreshFriendRequests();
   }
 
   Future<void> _openFriendRequests() async {
@@ -250,12 +229,6 @@ class _TavernScreenState extends State<TavernScreen> {
             const FriendRequestsScreen(),
       ),
     );
-
-    if (!mounted) {
-      return;
-    }
-
-    await _refreshFriendRequests();
   }
 
   @override
@@ -357,84 +330,166 @@ class _TavernScreenState extends State<TavernScreen> {
             ),
           ),
 
-          Stack(
-            clipBehavior: Clip.none,
-            children: [
-              IconButton(
-                tooltip: 'Demandes d’ami',
-                onPressed:
-                    _openFriendRequests,
-                icon: const Icon(
-                  Icons.people_alt_outlined,
-                  color: Color(
-                    0xffffd27a,
-                  ),
-                ),
-              ),
+          StreamBuilder<int>(
+            stream:
+                FriendService.incomingRequestCountStream(),
+            initialData: 0,
+            builder: (
+              BuildContext context,
+              AsyncSnapshot<int> snapshot,
+            ) {
+              final int count =
+                  snapshot.data ?? 0;
 
-              if (_incomingFriendRequestCount >
-                  0)
-                Positioned(
-                  right: 2,
-                  top: 1,
-                  child: IgnorePointer(
-                    child: Container(
-                      constraints:
-                          const BoxConstraints(
-                        minWidth: 19,
-                        minHeight: 19,
-                      ),
-                      padding:
-                          const EdgeInsets.symmetric(
-                        horizontal: 5,
-                      ),
-                      alignment:
-                          Alignment.center,
-                      decoration:
-                          BoxDecoration(
-                        color:
-                            Colors.redAccent,
-                        shape:
-                            BoxShape.circle,
-                        border:
-                            Border.all(
-                          color:
-                              const Color(
-                            0xff1d120b,
-                          ),
-                          width: 2,
-                        ),
-                      ),
-                      child: Text(
-                        _incomingFriendRequestCount >
-                                99
-                            ? '99+'
-                            : _incomingFriendRequestCount
-                                .toString(),
-                        style:
-                            const TextStyle(
-                          color:
-                              Colors.white,
-                          fontSize: 9,
-                          fontWeight:
-                              FontWeight.bold,
-                        ),
+              return Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  IconButton(
+                    tooltip: 'Demandes d’ami',
+                    onPressed:
+                        _openFriendRequests,
+                    icon: const Icon(
+                      Icons.people_alt_outlined,
+                      color: Color(
+                        0xffffd27a,
                       ),
                     ),
                   ),
-                ),
-            ],
+
+                  if (count > 0)
+                    Positioned(
+                      right: 2,
+                      top: 1,
+                      child: IgnorePointer(
+                        child: Container(
+                          constraints:
+                              const BoxConstraints(
+                            minWidth: 19,
+                            minHeight: 19,
+                          ),
+                          padding:
+                              const EdgeInsets.symmetric(
+                            horizontal: 5,
+                          ),
+                          alignment:
+                              Alignment.center,
+                          decoration:
+                              BoxDecoration(
+                            color:
+                                Colors.redAccent,
+                            shape:
+                                BoxShape.circle,
+                            border:
+                                Border.all(
+                              color:
+                                  const Color(
+                                0xff1d120b,
+                              ),
+                              width: 2,
+                            ),
+                          ),
+                          child: Text(
+                            count > 99
+                                ? '99+'
+                                : count.toString(),
+                            style:
+                                const TextStyle(
+                              color:
+                                  Colors.white,
+                              fontSize: 9,
+                              fontWeight:
+                                  FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              );
+            },
           ),
 
           const SizedBox(
-            width: 3,
+            width: 4,
           ),
 
-          const Icon(
-            Icons.local_fire_department,
-            color: Color(
-              0xffffa742,
-            ),
+          StreamBuilder<int>(
+            stream: OnlinePresenceService
+                .instance
+                .onlineCountStream,
+            initialData: OnlinePresenceService
+                .instance
+                .currentCount,
+            builder: (
+              BuildContext context,
+              AsyncSnapshot<int> snapshot,
+            ) {
+              final int count =
+                  snapshot.data ?? 0;
+
+              return Container(
+                padding:
+                    const EdgeInsets.symmetric(
+                  horizontal: 8,
+                  vertical: 6,
+                ),
+                decoration:
+                    BoxDecoration(
+                  color:
+                      Colors.white
+                          .withValues(
+                    alpha: 0.045,
+                  ),
+                  borderRadius:
+                      BorderRadius.circular(
+                    999,
+                  ),
+                  border:
+                      Border.all(
+                    color:
+                        Colors.white
+                            .withValues(
+                      alpha: 0.08,
+                    ),
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize:
+                      MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 8,
+                      height: 8,
+                      decoration:
+                          const BoxDecoration(
+                        color:
+                            Color(
+                          0xff42d66b,
+                        ),
+                        shape:
+                            BoxShape.circle,
+                      ),
+                    ),
+
+                    const SizedBox(
+                      width: 5,
+                    ),
+
+                    Text(
+                      count.toString(),
+                      style:
+                          const TextStyle(
+                        color:
+                            Colors.white70,
+                        fontSize: 11,
+                        fontWeight:
+                            FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
           ),
         ],
       ),
