@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/avatar_model.dart';
+import '../services/friend_alias_service.dart';
 import '../services/friend_service.dart';
 import 'private_chat_screen.dart';
 import '../widgets/avatar_renderer.dart';
@@ -23,6 +24,9 @@ class _FriendsScreenState
 
   List<Map<String, dynamic>> _friends =
       <Map<String, dynamic>>[];
+
+  Map<String, String> _aliases =
+      <String, String>{};
 
   @override
   void initState() {
@@ -47,12 +51,16 @@ class _FriendsScreenState
       final List<Map<String, dynamic>> friends =
           await FriendService.getFriends();
 
+      final Map<String, String> aliases =
+          await FriendAliasService.getAliases();
+
       if (!mounted) {
         return;
       }
 
       setState(() {
         _friends = friends;
+        _aliases = aliases;
         _loading = false;
       });
     } catch (error) {
@@ -269,10 +277,25 @@ class _FriendsScreenState
                 .trim() ??
             '';
 
-    final String name =
+    final String publicName =
         displayName.isNotEmpty
             ? displayName
             : 'Aventurier';
+
+    final String? alias =
+        _aliases[friendId];
+
+    final String name =
+        FriendAliasService.resolveDisplayName(
+      publicDisplayName:
+          publicName,
+      alias:
+          alias,
+    );
+
+    final bool hasAlias =
+        alias != null &&
+            alias.trim().isNotEmpty;
 
     final Map<String, dynamic>? publicData =
         _asMap(
@@ -339,6 +362,22 @@ class _FriendsScreenState
                             FontWeight.bold,
                       ),
                     ),
+
+                    if (hasAlias) ...[
+                      const SizedBox(
+                        height: 2,
+                      ),
+                      Text(
+                        '@$publicName',
+                        maxLines: 1,
+                        overflow:
+                            TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white38,
+                          fontSize: 11,
+                        ),
+                      ),
+                    ],
 
                     if (description.isNotEmpty) ...[
                       const SizedBox(
@@ -422,6 +461,28 @@ class _FriendsScreenState
                   String value,
                 ) {
                   if (value ==
+                      'alias') {
+                    _editAlias(
+                      friendId:
+                          friendId,
+                      publicDisplayName:
+                          publicName,
+                      currentAlias:
+                          alias,
+                    );
+                  }
+
+                  if (value ==
+                      'remove_alias') {
+                    _removeAlias(
+                      friendId:
+                          friendId,
+                      publicDisplayName:
+                          publicName,
+                    );
+                  }
+
+                  if (value ==
                       'remove') {
                     _confirmRemoveFriend(
                       friendId:
@@ -434,8 +495,54 @@ class _FriendsScreenState
                 itemBuilder: (
                   context,
                 ) {
-                  return const [
+                  return [
                     PopupMenuItem<String>(
+                      value: 'alias',
+                      child: Row(
+                        children: [
+                          const Icon(
+                            Icons.edit_outlined,
+                            color: Color(
+                              0xffffd27a,
+                            ),
+                          ),
+                          const SizedBox(
+                            width: 9,
+                          ),
+                          Text(
+                            hasAlias
+                                ? 'Modifier le surnom'
+                                : 'Définir un surnom',
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    if (hasAlias)
+                      const PopupMenuItem<String>(
+                        value:
+                            'remove_alias',
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons
+                                  .restart_alt_rounded,
+                              color:
+                                  Colors.white70,
+                            ),
+                            SizedBox(
+                              width: 9,
+                            ),
+                            Text(
+                              'Retirer le surnom',
+                            ),
+                          ],
+                        ),
+                      ),
+
+                    const PopupMenuDivider(),
+
+                    const PopupMenuItem<String>(
                       value: 'remove',
                       child: Row(
                         children: [
@@ -509,7 +616,8 @@ class _FriendsScreenState
                 child: OutlinedButton.icon(
                   onPressed: () {
                     _showPublicProfile(
-                      displayName: name,
+                      displayName:
+                          publicName,
                       publicData: publicData,
                     );
                   },
@@ -540,6 +648,239 @@ class _FriendsScreenState
             ],
           ),
         ],
+      ),
+    );
+  }
+
+  // ===========================================================================
+  // SURNOM PRIVÉ
+  // ===========================================================================
+
+  Future<void> _editAlias({
+    required String friendId,
+    required String publicDisplayName,
+    required String? currentAlias,
+  }) async {
+    if (friendId.isEmpty) {
+      return;
+    }
+
+    final TextEditingController controller =
+        TextEditingController(
+      text:
+          currentAlias?.trim() ?? '',
+    );
+
+    final String? nickname =
+        await showDialog<String>(
+      context: context,
+      builder: (
+        BuildContext dialogContext,
+      ) {
+        return AlertDialog(
+          backgroundColor: const Color(
+            0xff21150e,
+          ),
+          title: Text(
+            currentAlias == null ||
+                    currentAlias.trim().isEmpty
+                ? 'Définir un surnom'
+                : 'Modifier le surnom',
+            style: const TextStyle(
+              color: Color(
+                0xffffd27a,
+              ),
+            ),
+          ),
+          content: Column(
+            mainAxisSize:
+                MainAxisSize.min,
+            crossAxisAlignment:
+                CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Pseudo public : @$publicDisplayName',
+                style: const TextStyle(
+                  color: Colors.white54,
+                  fontSize: 12,
+                ),
+              ),
+
+              const SizedBox(
+                height: 14,
+              ),
+
+              TextField(
+                controller:
+                    controller,
+                autofocus: true,
+                maxLength: 30,
+                textCapitalization:
+                    TextCapitalization.words,
+                style: const TextStyle(
+                  color: Colors.white,
+                ),
+                decoration:
+                    const InputDecoration(
+                  labelText:
+                      'Surnom',
+                  labelStyle:
+                      TextStyle(
+                    color:
+                        Colors.white54,
+                  ),
+                  hintText:
+                      'Ex. Jojo',
+                  hintStyle:
+                      TextStyle(
+                    color:
+                        Colors.white30,
+                  ),
+                  enabledBorder:
+                      OutlineInputBorder(
+                    borderSide:
+                        BorderSide(
+                      color:
+                          Colors.white24,
+                    ),
+                  ),
+                  focusedBorder:
+                      OutlineInputBorder(
+                    borderSide:
+                        BorderSide(
+                      color:
+                          Color(
+                        0xffffc857,
+                      ),
+                    ),
+                  ),
+                ),
+                onSubmitted: (
+                  String value,
+                ) {
+                  final String clean =
+                      value.trim();
+
+                  if (clean.isNotEmpty) {
+                    Navigator.pop(
+                      dialogContext,
+                      clean,
+                    );
+                  }
+                },
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.pop(
+                  dialogContext,
+                );
+              },
+              child: const Text(
+                'Annuler',
+              ),
+            ),
+            FilledButton(
+              onPressed: () {
+                final String clean =
+                    controller.text.trim();
+
+                if (clean.isEmpty) {
+                  return;
+                }
+
+                Navigator.pop(
+                  dialogContext,
+                  clean,
+                );
+              },
+              style:
+                  FilledButton.styleFrom(
+                backgroundColor:
+                    const Color(
+                  0xff8b572a,
+                ),
+              ),
+              child: const Text(
+                'Enregistrer',
+              ),
+            ),
+          ],
+        );
+      },
+    );
+
+    controller.dispose();
+
+    if (nickname == null ||
+        nickname.trim().isEmpty) {
+      return;
+    }
+
+    final bool saved =
+        await FriendAliasService.setAlias(
+      friendId: friendId,
+      nickname: nickname,
+    );
+
+    if (!mounted) {
+      return;
+    }
+
+    if (saved) {
+      setState(() {
+        _aliases[friendId] =
+            nickname.trim();
+      });
+    }
+
+    ScaffoldMessenger.of(context)
+        .showSnackBar(
+      SnackBar(
+        content: Text(
+          saved
+              ? 'Surnom enregistré : ${nickname.trim()}'
+              : 'Impossible d’enregistrer ce surnom.',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _removeAlias({
+    required String friendId,
+    required String publicDisplayName,
+  }) async {
+    if (friendId.isEmpty) {
+      return;
+    }
+
+    final bool removed =
+        await FriendAliasService.removeAlias(
+      friendId,
+    );
+
+    if (!mounted) {
+      return;
+    }
+
+    if (removed) {
+      setState(() {
+        _aliases.remove(
+          friendId,
+        );
+      });
+    }
+
+    ScaffoldMessenger.of(context)
+        .showSnackBar(
+      SnackBar(
+        content: Text(
+          removed
+              ? 'Le pseudo @$publicDisplayName est de nouveau affiché.'
+              : 'Impossible de retirer ce surnom.',
+        ),
       ),
     );
   }
@@ -835,6 +1176,10 @@ class _FriendsScreenState
     );
 
     if (removed) {
+      await FriendAliasService.removeAlias(
+        friendId,
+      );
+
       await _loadFriends();
     }
   }

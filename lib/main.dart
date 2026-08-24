@@ -1,8 +1,10 @@
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'config/supabase_config.dart';
+import 'firebase_options.dart';
 import 'navigation/project_xp_page_transitions.dart';
 import 'screens/intro_splash_screen.dart';
 import 'services/app_audio_service.dart';
@@ -16,6 +18,18 @@ import 'widgets/global_tap_feedback.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // ===========================================================================
+  // FIREBASE
+  //
+  // Utilisé notamment pour les notifications push de Project XP.
+  // La configuration est générée automatiquement par FlutterFire dans :
+  // lib/firebase_options.dart
+  // ===========================================================================
+
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
 
   // ===========================================================================
   // ORIENTATION

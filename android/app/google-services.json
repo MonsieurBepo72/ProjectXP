@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "922128848865",
+    "project_id": "project-xp-app-2026-72",
+    "storage_bucket": "project-xp-app-2026-72.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:922128848865:android:e31061a2a26eeec6f624a0",
+        "android_client_info": {
+          "package_name": "com.example.project_xp"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCMEFeMaUJVqxYOwV6kLHTsnthqU6qTMis"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

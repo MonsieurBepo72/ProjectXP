@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../models/avatar_model.dart';
+import '../services/friend_alias_service.dart';
 import '../services/private_message_service.dart';
 import '../widgets/avatar_renderer.dart';
 import 'private_chat_screen.dart';
@@ -28,6 +29,9 @@ class _MessagesScreenState
 
   List<Map<String, dynamic>> _conversations =
       <Map<String, dynamic>>[];
+
+  Map<String, String> _aliases =
+      <String, String>{};
 
   bool _refreshScheduled = false;
 
@@ -73,12 +77,16 @@ class _MessagesScreenState
       final List<Map<String, dynamic>> inbox =
           await PrivateMessageService.getInbox();
 
+      final Map<String, String> aliases =
+          await FriendAliasService.getAliases();
+
       if (!mounted) {
         return;
       }
 
       setState(() {
         _conversations = inbox;
+        _aliases = aliases;
         _loading = false;
         _errorMessage = null;
       });
@@ -155,10 +163,18 @@ class _MessagesScreenState
                 .trim() ??
             '';
 
-    final String name =
+    final String publicName =
         displayName.isEmpty
             ? 'Aventurier'
             : displayName;
+
+    final String name =
+        FriendAliasService.resolveDisplayName(
+      publicDisplayName:
+          publicName,
+      alias:
+          _aliases[friendId],
+    );
 
     final String avatarUrl =
         profile?['avatar_url']
@@ -447,10 +463,25 @@ class _MessagesScreenState
                 .trim() ??
             '';
 
-    final String name =
+    final String publicName =
         displayName.isEmpty
             ? 'Aventurier'
             : displayName;
+
+    final String? alias =
+        _aliases[friendId];
+
+    final String name =
+        FriendAliasService.resolveDisplayName(
+      publicDisplayName:
+          publicName,
+      alias:
+          alias,
+    );
+
+    final bool hasAlias =
+        alias != null &&
+            alias.trim().isNotEmpty;
 
     final String lastMessage =
         conversation['last_message']
@@ -588,6 +619,22 @@ class _MessagesScreenState
                         ),
                       ],
                     ),
+
+                    if (hasAlias) ...[
+                      const SizedBox(
+                        height: 2,
+                      ),
+                      Text(
+                        '@$publicName',
+                        maxLines: 1,
+                        overflow:
+                            TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white30,
+                          fontSize: 10,
+                        ),
+                      ),
+                    ],
 
                     const SizedBox(
                       height: 5,
