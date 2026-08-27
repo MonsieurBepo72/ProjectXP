@@ -1,10 +1,13 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../models/avatar_model.dart';
-import 'friend_requests_screen.dart';
-import 'friends_screen.dart';
+import '../services/content_moderation_service.dart';
 import '../services/friend_service.dart';
 import '../services/online_presence_service.dart';
+import '../services/project_xp_admin_service.dart';
+import '../services/project_xp_message_send_result.dart';
 import '../services/supabase_service.dart';
 import '../services/tavern_service.dart';
 import '../widgets/avatar_renderer.dart';
@@ -27,7 +30,12 @@ class _TavernScreenState extends State<TavernScreen> {
 
   bool _loadingChannels = true;
   bool _sendingMessage = false;
+  bool _isProjectXpAdmin = false;
+  bool _resettingTavern = false;
 
+  String? _pendingMessageContent;
+  String? _pendingMessageChannelId;
+  DateTime? _pendingMessageCreatedAt;
 
   String? _errorMessage;
 
@@ -41,7 +49,13 @@ class _TavernScreenState extends State<TavernScreen> {
   @override
   void initState() {
     super.initState();
+
     _loadChannels();
+    _loadAdminAccess();
+
+    unawaited(
+      ContentModerationService.warmUp(),
+    );
   }
 
   @override
@@ -49,6 +63,136 @@ class _TavernScreenState extends State<TavernScreen> {
     _messageController.dispose();
     _messageScrollController.dispose();
     super.dispose();
+  }
+
+  // ===========================================================================
+  // ADMIN PROJECT XP
+  // ===========================================================================
+
+  Future<void> _loadAdminAccess() async {
+    final bool isAdmin =
+        await ProjectXpAdminService.isCurrentUserAdmin();
+
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _isProjectXpAdmin = isAdmin;
+    });
+  }
+
+  Future<void> _confirmResetTavern() async {
+    if (!_isProjectXpAdmin ||
+        _resettingTavern) {
+      return;
+    }
+
+    final bool? confirmed =
+        await showDialog<bool>(
+      context: context,
+      builder: (
+        BuildContext dialogContext,
+      ) {
+        return AlertDialog(
+          backgroundColor: const Color(
+            0xff21150e,
+          ),
+          title: const Text(
+            'Réinitialiser la Taverne ?',
+            style: TextStyle(
+              color: Color(
+                0xffffd27a,
+              ),
+            ),
+          ),
+          content: const Text(
+            'Tous les messages publics de la Taverne seront supprimés.\n\n'
+            'Les channels, profils, amis et messages privés seront conservés.',
+            style: TextStyle(
+              color: Colors.white70,
+              height: 1.4,
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.pop(
+                  dialogContext,
+                  false,
+                );
+              },
+              child: const Text(
+                'Annuler',
+              ),
+            ),
+            FilledButton.icon(
+              onPressed: () {
+                Navigator.pop(
+                  dialogContext,
+                  true,
+                );
+              },
+              style: FilledButton.styleFrom(
+                backgroundColor:
+                    Colors.redAccent,
+                foregroundColor:
+                    Colors.white,
+              ),
+              icon: const Icon(
+                Icons.delete_sweep_rounded,
+              ),
+              label: const Text(
+                'Réinitialiser',
+              ),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed != true ||
+        !mounted) {
+      return;
+    }
+
+    setState(() {
+      _resettingTavern = true;
+    });
+
+    final int? deletedCount =
+        await ProjectXpAdminService
+            .resetTavernMessages();
+
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _resettingTavern = false;
+    });
+
+    if (deletedCount == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Réinitialisation impossible. Vérifie les droits administrateur.',
+          ),
+        ),
+      );
+
+      return;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          deletedCount == 1
+              ? 'Taverne réinitialisée : 1 message supprimé.'
+              : 'Taverne réinitialisée : $deletedCount messages supprimés.',
+        ),
+      ),
+    );
   }
 
   Future<void> _loadChannels() async {
@@ -150,11 +294,45 @@ class _TavernScreenState extends State<TavernScreen> {
       return;
     }
 
+    final ContentModerationResult moderation =
+        ContentModerationService.checkTextImmediate(
+      content,
+    );
+
+    if (moderation.blocked) {
+      // Un message refusé par la modération ne doit pas rester dans
+      // la zone de saisie : on repart immédiatement sur un champ propre.
+      _messageController.clear();
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Ce message contient un contenu interdit par les règles de Project XP.',
+          ),
+        ),
+      );
+
+      return;
+    }
+
+    // Affichage optimiste : le joueur voit immédiatement son message.
+    // Il n'est cependant PAS encore publié aux autres joueurs : seule l'Edge
+    // Function peut l'insérer après la modération serveur.
     setState(() {
       _sendingMessage = true;
+      _pendingMessageContent = content;
+      _pendingMessageChannelId = channelId;
+      _pendingMessageCreatedAt = DateTime.now();
+      _messageController.clear();
     });
 
-    final bool success =
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) {
+        _scrollToBottom();
+      },
+    );
+
+    final ProjectXpMessageSendResult result =
         await TavernService.sendMessage(
       channelId: channelId,
       content: content,
@@ -166,11 +344,12 @@ class _TavernScreenState extends State<TavernScreen> {
 
     setState(() {
       _sendingMessage = false;
+      _pendingMessageContent = null;
+      _pendingMessageChannelId = null;
+      _pendingMessageCreatedAt = null;
     });
 
-    if (success) {
-      _messageController.clear();
-
+    if (result.sent) {
       WidgetsBinding.instance.addPostFrameCallback(
         (_) {
           _scrollToBottom();
@@ -180,10 +359,31 @@ class _TavernScreenState extends State<TavernScreen> {
       return;
     }
 
+    if (result.blocked) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Ce message a été bloqué par la modération de Project XP.',
+          ),
+        ),
+      );
+
+      return;
+    }
+
+    // Une panne réseau ne doit pas faire perdre le texte du joueur.
+    if (_messageController.text.trim().isEmpty) {
+      _messageController.text = content;
+      _messageController.selection =
+          TextSelection.collapsed(
+        offset: content.length,
+      );
+    }
+
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
         content: Text(
-          'Impossible d’envoyer le message.',
+          'Impossible d’envoyer le message pour le moment.',
         ),
       ),
     );
@@ -200,34 +400,6 @@ class _TavernScreenState extends State<TavernScreen> {
         milliseconds: 350,
       ),
       curve: Curves.easeOut,
-    );
-  }
-
-  // ===========================================================================
-  // AMIS / DEMANDES D'AMI
-  // ===========================================================================
-
-  Future<void> _openFriends() async {
-    await Navigator.push<void>(
-      context,
-      MaterialPageRoute<void>(
-        builder: (
-          context,
-        ) =>
-            const FriendsScreen(),
-      ),
-    );
-  }
-
-  Future<void> _openFriendRequests() async {
-    await Navigator.push<void>(
-      context,
-      MaterialPageRoute<void>(
-        builder: (
-          context,
-        ) =>
-            const FriendRequestsScreen(),
-      ),
     );
   }
 
@@ -297,6 +469,8 @@ class _TavernScreenState extends State<TavernScreen> {
               children: [
                 Text(
                   'LA TAVERNE',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     color: Color(
                       0xffffd27a,
@@ -311,6 +485,8 @@ class _TavernScreenState extends State<TavernScreen> {
                 ),
                 Text(
                   'Le lieu de rencontre des aventuriers',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     color: Colors.white60,
                     fontSize: 11,
@@ -319,95 +495,66 @@ class _TavernScreenState extends State<TavernScreen> {
               ],
             ),
           ),
-          IconButton(
-            tooltip: 'Mes amis',
-            onPressed: _openFriends,
-            icon: const Icon(
-              Icons.group_outlined,
-              color: Color(
-                0xffffd27a,
+          if (_isProjectXpAdmin)
+            PopupMenuButton<String>(
+              tooltip: 'Administration Project XP',
+              color: const Color(
+                0xff21150e,
               ),
-            ),
-          ),
-
-          StreamBuilder<int>(
-            stream:
-                FriendService.incomingRequestCountStream(),
-            initialData: 0,
-            builder: (
-              BuildContext context,
-              AsyncSnapshot<int> snapshot,
-            ) {
-              final int count =
-                  snapshot.data ?? 0;
-
-              return Stack(
-                clipBehavior: Clip.none,
-                children: [
-                  IconButton(
-                    tooltip: 'Demandes d’ami',
-                    onPressed:
-                        _openFriendRequests,
-                    icon: const Icon(
-                      Icons.people_alt_outlined,
+              icon: _resettingTavern
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child:
+                          CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Color(
+                          0xffffd27a,
+                        ),
+                      ),
+                    )
+                  : const Icon(
+                      Icons
+                          .admin_panel_settings_outlined,
                       color: Color(
                         0xffffd27a,
                       ),
                     ),
-                  ),
-
-                  if (count > 0)
-                    Positioned(
-                      right: 2,
-                      top: 1,
-                      child: IgnorePointer(
-                        child: Container(
-                          constraints:
-                              const BoxConstraints(
-                            minWidth: 19,
-                            minHeight: 19,
-                          ),
-                          padding:
-                              const EdgeInsets.symmetric(
-                            horizontal: 5,
-                          ),
-                          alignment:
-                              Alignment.center,
-                          decoration:
-                              BoxDecoration(
-                            color:
-                                Colors.redAccent,
-                            shape:
-                                BoxShape.circle,
-                            border:
-                                Border.all(
-                              color:
-                                  const Color(
-                                0xff1d120b,
-                              ),
-                              width: 2,
-                            ),
-                          ),
-                          child: Text(
-                            count > 99
-                                ? '99+'
-                                : count.toString(),
-                            style:
-                                const TextStyle(
-                              color:
-                                  Colors.white,
-                              fontSize: 9,
-                              fontWeight:
-                                  FontWeight.bold,
-                            ),
-                          ),
+              enabled: !_resettingTavern,
+              onSelected: (
+                String value,
+              ) {
+                if (value ==
+                    'reset_tavern') {
+                  _confirmResetTavern();
+                }
+              },
+              itemBuilder: (
+                BuildContext context,
+              ) {
+                return const [
+                  PopupMenuItem<String>(
+                    value: 'reset_tavern',
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons
+                              .delete_sweep_outlined,
+                          color:
+                              Colors.redAccent,
                         ),
-                      ),
+                        SizedBox(
+                          width: 10,
+                        ),
+                        Text(
+                          'Réinitialiser le chat',
+                        ),
+                      ],
                     ),
-                ],
-              );
-            },
-          ),
+                  ),
+                ];
+              },
+            ),
 
           const SizedBox(
             width: 4,
@@ -490,6 +637,15 @@ class _TavernScreenState extends State<TavernScreen> {
                 ),
               );
             },
+          ),
+
+          // Zone réservée au mini Communicateur global.
+          //
+          // Le téléphone reste tout à droite, au même emplacement que sur
+          // les autres écrans, et les boutons Amis / Demandes / En ligne sont
+          // naturellement décalés vers la gauche sans être recouverts.
+          const SizedBox(
+            width: 48,
           ),
         ],
       ),
@@ -772,7 +928,15 @@ class _TavernScreenState extends State<TavernScreen> {
                   snapshot.data ??
                       <Map<String, dynamic>>[];
 
-              if (messages.isEmpty) {
+              final String pendingContent =
+                  _pendingMessageContent?.trim() ?? '';
+
+              final bool hasPendingMessage =
+                  pendingContent.isNotEmpty &&
+                      _pendingMessageChannelId == channelId;
+
+              if (messages.isEmpty &&
+                  !hasPendingMessage) {
                 return const Center(
                   child: Padding(
                     padding: EdgeInsets.all(
@@ -832,7 +996,9 @@ class _TavernScreenState extends State<TavernScreen> {
                   14,
                   20,
                 ),
-                itemCount: messages.length,
+                itemCount:
+                    messages.length +
+                        (hasPendingMessage ? 1 : 0),
                 separatorBuilder: (
                   context,
                   index,
@@ -845,6 +1011,12 @@ class _TavernScreenState extends State<TavernScreen> {
                   context,
                   index,
                 ) {
+                  if (index >= messages.length) {
+                    return _buildPendingMessage(
+                      pendingContent,
+                    );
+                  }
+
                   return _buildMessage(
                     messages[index],
                   );
@@ -928,6 +1100,145 @@ class _TavernScreenState extends State<TavernScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildPendingMessage(
+    String content,
+  ) {
+    final String time =
+        _formatMessageTime(
+      _pendingMessageCreatedAt
+          ?.toIso8601String(),
+    );
+
+    return Opacity(
+      opacity: 0.72,
+      child: Container(
+        padding: const EdgeInsets.all(
+          12,
+        ),
+        decoration: BoxDecoration(
+          color: const Color(
+            0xff24170e,
+          ),
+          borderRadius: BorderRadius.circular(
+            13,
+          ),
+          border: Border.all(
+            color: const Color(
+              0xff7a5732,
+            ),
+          ),
+        ),
+        child: Row(
+          crossAxisAlignment:
+              CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: 38,
+              height: 38,
+              alignment: Alignment.center,
+              decoration: const BoxDecoration(
+                color: Color(
+                  0xff4a301c,
+                ),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.send_rounded,
+                size: 18,
+                color: Color(
+                  0xffffc857,
+                ),
+              ),
+            ),
+            const SizedBox(
+              width: 11,
+            ),
+            Expanded(
+              child: Column(
+                crossAxisAlignment:
+                    CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Expanded(
+                        child: Text(
+                          'Vous',
+                          overflow:
+                              TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: Color(
+                              0xffffc857,
+                            ),
+                            fontWeight:
+                                FontWeight.bold,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(
+                        width: 8,
+                      ),
+                      Text(
+                        time,
+                        style: const TextStyle(
+                          color: Colors.white38,
+                          fontSize: 10,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(
+                    height: 7,
+                  ),
+                  Text(
+                    content,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 14,
+                      height: 1.35,
+                    ),
+                  ),
+                  const SizedBox(
+                    height: 7,
+                  ),
+                  const Row(
+                    mainAxisSize:
+                        MainAxisSize.min,
+                    children: [
+                      SizedBox(
+                        width: 11,
+                        height: 11,
+                        child:
+                            CircularProgressIndicator(
+                          strokeWidth: 1.4,
+                          color: Color(
+                            0xffffc857,
+                          ),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 6,
+                      ),
+                      Text(
+                        'Envoi…',
+                        style: TextStyle(
+                          color: Colors.white54,
+                          fontSize: 10,
+                          fontStyle:
+                              FontStyle.italic,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

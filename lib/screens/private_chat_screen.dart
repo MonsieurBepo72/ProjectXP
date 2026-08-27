@@ -1,7 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../models/avatar_model.dart';
+import '../services/content_moderation_service.dart';
 import '../services/private_message_service.dart';
+import '../services/project_xp_message_send_result.dart';
+import '../services/project_xp_communicator_ui_service.dart';
 import '../widgets/avatar_renderer.dart';
 
 class PrivateChatScreen extends StatefulWidget {
@@ -11,12 +16,14 @@ class PrivateChatScreen extends StatefulWidget {
     required this.displayName,
     this.avatarUrl,
     this.avatarData,
+    this.initialConversationId,
   });
 
   final String friendId;
   final String displayName;
   final String? avatarUrl;
   final Map<String, dynamic>? avatarData;
+  final String? initialConversationId;
 
   @override
   State<PrivateChatScreen> createState() =>
@@ -25,6 +32,37 @@ class PrivateChatScreen extends StatefulWidget {
 
 class _PrivateChatScreenState
     extends State<PrivateChatScreen> {
+  final Object _globalCommunicatorAlertToken =
+      Object();
+
+  bool _globalCommunicatorAlertSuppressed = false;
+
+  void _suppressGlobalCommunicatorAlert() {
+    if (_globalCommunicatorAlertSuppressed) {
+      return;
+    }
+
+    _globalCommunicatorAlertSuppressed = true;
+
+    ProjectXpCommunicatorUiService
+        .suppressGlobalCommunicatorAlert(
+      _globalCommunicatorAlertToken,
+    );
+  }
+
+  void _releaseGlobalCommunicatorAlert() {
+    if (!_globalCommunicatorAlertSuppressed) {
+      return;
+    }
+
+    _globalCommunicatorAlertSuppressed = false;
+
+    ProjectXpCommunicatorUiService
+        .releaseGlobalCommunicatorAlert(
+      _globalCommunicatorAlertToken,
+    );
+  }
+
   final TextEditingController _messageController =
       TextEditingController();
 
@@ -42,17 +80,41 @@ class _PrivateChatScreenState
 
   bool _sendingMessage = false;
 
+  String? _pendingMessageContent;
+  DateTime? _pendingMessageCreatedAt;
+
   String? _errorMessage;
 
   @override
   void initState() {
     super.initState();
 
+    // Cet écran appartient au Communicateur XP :
+    // le mini Communicateur global doit rester caché pendant toute sa vie,
+    // y compris après un retour arrière / une réouverture.
+    _suppressGlobalCommunicatorAlert();
+
     _initializeConversation();
+
+    unawaited(
+      ContentModerationService.warmUp(),
+    );
   }
 
   @override
   void dispose() {
+    final String conversationId =
+        _conversationId?.trim() ?? '';
+
+    if (conversationId.isNotEmpty) {
+      ProjectXpCommunicatorUiService
+          .clearActiveConversation(
+        conversationId,
+      );
+    }
+
+    _releaseGlobalCommunicatorAlert();
+
     _messageController.dispose();
     _messageFocusNode.dispose();
     _scrollController.dispose();
@@ -65,11 +127,18 @@ class _PrivateChatScreenState
   // ===========================================================================
 
   Future<void> _initializeConversation() async {
+    final String suppliedConversationId =
+        widget.initialConversationId
+                ?.trim() ??
+            '';
+
     final String? conversationId =
-        await PrivateMessageService
-            .getOrCreateConversation(
-      widget.friendId,
-    );
+        suppliedConversationId.isNotEmpty
+            ? suppliedConversationId
+            : await PrivateMessageService
+                .getOrCreateConversation(
+                widget.friendId,
+              );
 
     if (!mounted) {
       return;
@@ -86,15 +155,57 @@ class _PrivateChatScreenState
       return;
     }
 
+    ProjectXpCommunicatorUiService
+        .setActiveConversation(
+      conversationId,
+    );
+
+    await _markConversationReadSafely(
+      conversationId,
+    );
+
+    if (!mounted) {
+      return;
+    }
+
     setState(() {
       _conversationId = conversationId;
       _messageStream =
-          PrivateMessageService.messageStream(
+          PrivateMessageService
+              .messageStream(
         conversationId,
+      ).map(
+        (
+          List<Map<String, dynamic>>
+              messages,
+        ) {
+          unawaited(
+            _markConversationReadSafely(
+              conversationId,
+            ),
+          );
+
+          return messages;
+        },
       );
       _loadingConversation = false;
       _errorMessage = null;
     });
+  }
+
+  Future<void> _markConversationReadSafely(
+    String conversationId,
+  ) async {
+    try {
+      await PrivateMessageService
+          .markConversationRead(
+        conversationId,
+      );
+    } catch (error) {
+      debugPrint(
+        'Lecture conversation impossible : $error',
+      );
+    }
   }
 
   // ===========================================================================
@@ -115,11 +226,42 @@ class _PrivateChatScreenState
       return;
     }
 
+    final ContentModerationResult localModeration =
+        ContentModerationService.checkTextImmediate(
+      content,
+    );
+
+    if (localModeration.blocked) {
+      // Même comportement que dans la Taverne : si Project XP refuse
+      // le contenu, il ne reste pas dans la barre de saisie.
+      _messageController.clear();
+      _messageFocusNode.requestFocus();
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Ce message contient un contenu interdit par les règles de Project XP.',
+          ),
+        ),
+      );
+
+      return;
+    }
+
+    // Le message apparaît immédiatement chez l'expéditeur, mais il n'est pas
+    // encore publié dans Supabase. La publication réelle attend toujours le feu
+    // vert de la modération serveur.
     setState(() {
       _sendingMessage = true;
+      _pendingMessageContent = content;
+      _pendingMessageCreatedAt = DateTime.now();
+      _messageController.clear();
     });
 
-    final bool sent =
+    _messageFocusNode.requestFocus();
+    _scrollToBottom();
+
+    final ProjectXpMessageSendResult result =
         await PrivateMessageService.sendMessage(
       conversationId: conversationId,
       content: content,
@@ -131,13 +273,21 @@ class _PrivateChatScreenState
 
     setState(() {
       _sendingMessage = false;
+      _pendingMessageContent = null;
+      _pendingMessageCreatedAt = null;
     });
 
-    if (!sent) {
+    if (result.sent) {
+      _messageFocusNode.requestFocus();
+      _scrollToBottom();
+      return;
+    }
+
+    if (result.blocked) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
-            'Impossible d’envoyer le message.',
+            'Ce message a été bloqué par la modération de Project XP.',
           ),
         ),
       );
@@ -145,11 +295,23 @@ class _PrivateChatScreenState
       return;
     }
 
-    _messageController.clear();
+    if (_messageController.text.trim().isEmpty) {
+      _messageController.text = content;
+      _messageController.selection =
+          TextSelection.collapsed(
+        offset: content.length,
+      );
+    }
 
     _messageFocusNode.requestFocus();
 
-    _scrollToBottom();
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Impossible d’envoyer le message pour le moment.',
+        ),
+      ),
+    );
   }
 
   // ===========================================================================
@@ -365,7 +527,14 @@ class _PrivateChatScreenState
             snapshot.data ??
                 <Map<String, dynamic>>[];
 
-        if (messages.isEmpty) {
+        final String pendingContent =
+            _pendingMessageContent?.trim() ?? '';
+
+        final bool hasPendingMessage =
+            pendingContent.isNotEmpty;
+
+        if (messages.isEmpty &&
+            !hasPendingMessage) {
           return ListView(
             controller: _scrollController,
             physics:
@@ -413,11 +582,19 @@ class _PrivateChatScreenState
             12,
             18,
           ),
-          itemCount: messages.length,
+          itemCount:
+              messages.length +
+                  (hasPendingMessage ? 1 : 0),
           itemBuilder: (
             BuildContext context,
             int index,
           ) {
+            if (index >= messages.length) {
+              return _buildPendingMessageBubble(
+                pendingContent,
+              );
+            }
+
             return _buildMessageBubble(
               messages[index],
             );
@@ -430,6 +607,118 @@ class _PrivateChatScreenState
   // ===========================================================================
   // BULLE DE MESSAGE
   // ===========================================================================
+
+  Widget _buildPendingMessageBubble(
+    String content,
+  ) {
+    final String time =
+        _formatMessageTime(
+      _pendingMessageCreatedAt,
+    );
+
+    return Padding(
+      padding: const EdgeInsets.only(
+        bottom: 9,
+      ),
+      child: Row(
+        mainAxisAlignment:
+            MainAxisAlignment.end,
+        crossAxisAlignment:
+            CrossAxisAlignment.end,
+        children: [
+          Flexible(
+            child: Opacity(
+              opacity: 0.72,
+              child: Container(
+                constraints: BoxConstraints(
+                  maxWidth:
+                      MediaQuery.sizeOf(context).width *
+                          0.70,
+                ),
+                padding: const EdgeInsets.fromLTRB(
+                  13,
+                  9,
+                  13,
+                  7,
+                ),
+                decoration: BoxDecoration(
+                  color: const Color(
+                    0xff73451f,
+                  ),
+                  borderRadius:
+                      const BorderRadius.only(
+                    topLeft: Radius.circular(
+                      16,
+                    ),
+                    topRight: Radius.circular(
+                      16,
+                    ),
+                    bottomLeft: Radius.circular(
+                      16,
+                    ),
+                    bottomRight: Radius.circular(
+                      4,
+                    ),
+                  ),
+                  border: Border.all(
+                    color: const Color(
+                      0xffa86d32,
+                    ),
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment:
+                      CrossAxisAlignment.end,
+                  children: [
+                    Text(
+                      content,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                        height: 1.35,
+                      ),
+                    ),
+                    const SizedBox(
+                      height: 4,
+                    ),
+                    Row(
+                      mainAxisSize:
+                          MainAxisSize.min,
+                      children: [
+                        const SizedBox(
+                          width: 10,
+                          height: 10,
+                          child:
+                              CircularProgressIndicator(
+                            strokeWidth: 1.3,
+                            color: Colors.white54,
+                          ),
+                        ),
+                        const SizedBox(
+                          width: 5,
+                        ),
+                        Text(
+                          time.isEmpty
+                              ? 'Envoi…'
+                              : '$time · Envoi…',
+                          style: const TextStyle(
+                            color: Colors.white54,
+                            fontSize: 9,
+                            fontStyle:
+                                FontStyle.italic,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
   Widget _buildMessageBubble(
     Map<String, dynamic> message,

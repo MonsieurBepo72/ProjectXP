@@ -1,5 +1,7 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'content_moderation_service.dart';
+import 'project_xp_message_send_result.dart';
 import 'supabase_service.dart';
 
 class TavernService {
@@ -131,39 +133,76 @@ class TavernService {
   // ENVOYER UN MESSAGE
   // ===========================================================================
 
-  static Future<bool> sendMessage({
+  static Future<ProjectXpMessageSendResult> sendMessage({
     required String channelId,
     required String content,
   }) async {
     final User? user =
         SupabaseService.currentUser;
 
-    if (user == null) {
-      return false;
-    }
+    final String cleanChannelId =
+        channelId.trim();
 
     final String cleanContent =
         content.trim();
 
-    if (cleanContent.isEmpty ||
+    if (user == null ||
+        cleanChannelId.isEmpty ||
+        cleanContent.isEmpty ||
         cleanContent.length > 2000) {
-      return false;
+      return ProjectXpMessageSendResult.failure;
+    }
+
+    // Premier bouclier local :
+    // rapide, léger, et utilisable même si le réseau est momentanément lent.
+    final ContentModerationResult localModeration =
+        ContentModerationService.checkTextImmediate(
+      cleanContent,
+    );
+
+    if (localModeration.blocked) {
+      return ProjectXpMessageSendResult.denied;
     }
 
     try {
-      await SupabaseService.client
-          .from('tavern_messages')
-          .insert(
-        {
-          'channel_id': channelId,
-          'author_id': user.id,
+      final response =
+          await SupabaseService.client.functions.invoke(
+        'send-moderated-message',
+        body: <String, dynamic>{
+          'surface': 'tavern',
+          'channel_id': cleanChannelId,
           'content': cleanContent,
         },
       );
 
-      return true;
+      final dynamic rawData =
+          response.data;
+
+      final Map<String, dynamic> data =
+          rawData is Map
+              ? Map<String, dynamic>.from(
+                  rawData,
+                )
+              : <String, dynamic>{};
+
+      final String status =
+          data['status']
+                  ?.toString()
+                  .trim() ??
+              '';
+
+      switch (status) {
+        case 'sent':
+          return ProjectXpMessageSendResult.success;
+
+        case 'blocked':
+          return ProjectXpMessageSendResult.denied;
+
+        default:
+          return ProjectXpMessageSendResult.failure;
+      }
     } catch (_) {
-      return false;
+      return ProjectXpMessageSendResult.failure;
     }
   }
 

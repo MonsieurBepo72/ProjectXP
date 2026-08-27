@@ -1,13 +1,39 @@
 import 'dart:async';
 
 import 'package:firebase_messaging/firebase_messaging.dart';
-import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 import 'computer_settings_service.dart';
 import 'push_device_token_service.dart';
 
-class AppNotificationService {
+class ProjectXpInAppNotification {
+  final String title;
+  final String body;
+  final String? payload;
+  final Map<String, dynamic> data;
+
+  const ProjectXpInAppNotification({
+    required this.title,
+    required this.body,
+    required this.payload,
+    this.data = const <String, dynamic>{},
+  });
+}
+
+class ProjectXpNotificationTap {
+  final String? payload;
+  final Map<String, dynamic> data;
+  final bool coldStart;
+
+  const ProjectXpNotificationTap({
+    required this.payload,
+    this.data = const <String, dynamic>{},
+    this.coldStart = false,
+  });
+}
+
+class AppNotificationService with WidgetsBindingObserver {
   AppNotificationService._();
 
   static final AppNotificationService instance =
@@ -19,10 +45,33 @@ class AppNotificationService {
   final FirebaseMessaging _messaging =
       FirebaseMessaging.instance;
 
+  final StreamController<ProjectXpInAppNotification>
+      _inAppNotificationController =
+      StreamController<ProjectXpInAppNotification>.broadcast();
+
+  final StreamController<ProjectXpNotificationTap>
+      _notificationTapController =
+      StreamController<ProjectXpNotificationTap>.broadcast();
+
+  final List<ProjectXpNotificationTap>
+      _pendingNotificationTaps =
+      <ProjectXpNotificationTap>[];
+
   bool _initialized = false;
+  bool _isAppInForeground = true;
+  bool _notificationTapUiReady = false;
+
+  Stream<ProjectXpInAppNotification>
+      get inAppNotifications =>
+          _inAppNotificationController.stream;
+
+  Stream<ProjectXpNotificationTap>
+      get notificationTaps =>
+          _notificationTapController.stream;
 
   StreamSubscription<String>? _tokenRefreshSubscription;
   StreamSubscription<RemoteMessage>? _foregroundMessageSubscription;
+  StreamSubscription<RemoteMessage>? _openedAppSubscription;
 
   String? _lastKnownFcmToken;
 
@@ -51,6 +100,9 @@ class AppNotificationService {
       return;
     }
 
+    WidgetsBinding.instance.addObserver(this);
+    _isAppInForeground = true;
+
     // =========================================================================
     // NOTIFICATIONS LOCALES ANDROID
     // =========================================================================
@@ -70,6 +122,31 @@ class AppNotificationService {
       onDidReceiveNotificationResponse:
           _onNotificationTapped,
     );
+
+    try {
+      final NotificationAppLaunchDetails?
+          launchDetails =
+          await _plugin
+              .getNotificationAppLaunchDetails();
+
+      final NotificationResponse? response =
+          launchDetails?.notificationResponse;
+
+      if (launchDetails?.didNotificationLaunchApp ==
+              true &&
+          response != null) {
+        _emitNotificationTap(
+          ProjectXpNotificationTap(
+            payload: response.payload,
+            coldStart: true,
+          ),
+        );
+      }
+    } catch (error) {
+      debugPrint(
+        'Lecture du lancement par notification locale impossible : $error',
+      );
+    }
 
     final AndroidFlutterLocalNotificationsPlugin?
         androidPlugin =
@@ -171,9 +248,11 @@ class AppNotificationService {
       },
     );
 
-    // Quand Project XP est déjà ouvert, Android n'affiche pas forcément
-    // automatiquement la notification distante. On la transforme donc
-    // en notification locale.
+    // Quand Project XP est déjà ouvert, on NE crée plus de notification
+    // Android locale. Le message devient un événement interne à Project XP.
+    //
+    // Plus tard, l'interface globale écoutera ce flux pour faire apparaître
+    // le petit Communicateur vibrant en haut des écrans concernés.
     await _foregroundMessageSubscription?.cancel();
 
     _foregroundMessageSubscription =
@@ -185,6 +264,41 @@ class AppNotificationService {
         );
       },
     );
+
+    await _openedAppSubscription?.cancel();
+
+    _openedAppSubscription =
+        FirebaseMessaging.onMessageOpenedApp.listen(
+      (
+        RemoteMessage message,
+      ) {
+        _handleRemoteNotificationTap(
+          message,
+          coldStart: false,
+        );
+      },
+      onError: (Object error) {
+        debugPrint(
+          'Erreur ouverture notification FCM : $error',
+        );
+      },
+    );
+
+    try {
+      final RemoteMessage? initialMessage =
+          await _messaging.getInitialMessage();
+
+      if (initialMessage != null) {
+        _handleRemoteNotificationTap(
+          initialMessage,
+          coldStart: true,
+        );
+      }
+    } catch (error) {
+      debugPrint(
+        'Lecture de la notification FCM initiale impossible : $error',
+      );
+    }
   }
 
   Future<void> _handleForegroundMessage(
@@ -209,17 +323,56 @@ class AppNotificationService {
                 message.data,
               );
 
-    if (body.isEmpty) {
+    if (body.isEmpty ||
+        !ComputerSettingsService
+            .current.notificationsEnabled) {
       return;
     }
 
-    await show(
+    _emitInAppNotification(
       title: title,
       body: body,
       payload: _payloadFromMessage(
         message,
       ),
+      data: message.data,
     );
+  }
+
+  void _emitInAppNotification({
+    required String title,
+    required String body,
+    String? payload,
+    Map<String, dynamic> data =
+        const <String, dynamic>{},
+  }) {
+    if (_inAppNotificationController.isClosed) {
+      return;
+    }
+
+    _inAppNotificationController.add(
+      ProjectXpInAppNotification(
+        title: title,
+        body: body,
+        payload: payload,
+        data: Map<String, dynamic>.unmodifiable(
+          data,
+        ),
+      ),
+    );
+
+    debugPrint(
+      'Notification Project XP gérée dans l’app : $payload',
+    );
+  }
+
+  @override
+  void didChangeAppLifecycleState(
+    AppLifecycleState state,
+  ) {
+    _isAppInForeground =
+        state == AppLifecycleState.resumed ||
+        state == AppLifecycleState.inactive;
   }
 
   String _bodyFromData(
@@ -265,6 +418,31 @@ class AppNotificationService {
     return null;
   }
 
+  void _handleRemoteNotificationTap(
+    RemoteMessage message, {
+    required bool coldStart,
+  }) {
+    final String? payload =
+        _payloadFromMessage(
+      message,
+    );
+
+    debugPrint(
+      'Notification FCM Project XP touchée : $payload',
+    );
+
+    _emitNotificationTap(
+      ProjectXpNotificationTap(
+        payload: payload,
+        data:
+            Map<String, dynamic>.unmodifiable(
+          message.data,
+        ),
+        coldStart: coldStart,
+      ),
+    );
+  }
+
   void _onNotificationTapped(
     NotificationResponse response,
   ) {
@@ -272,10 +450,43 @@ class AppNotificationService {
       'Notification Project XP touchée : ${response.payload}',
     );
 
-    // Pour l'instant, toucher une notification ouvre Project XP.
-    //
-    // Plus tard, on utilisera le payload "private_message:<conversation_id>"
-    // pour ouvrir directement la bonne conversation privée.
+    _emitNotificationTap(
+      ProjectXpNotificationTap(
+        payload: response.payload,
+      ),
+    );
+  }
+
+  void _emitNotificationTap(
+    ProjectXpNotificationTap event,
+  ) {
+    if (_notificationTapUiReady) {
+      _notificationTapController.add(
+        event,
+      );
+
+      return;
+    }
+
+    _pendingNotificationTaps.add(
+      event,
+    );
+  }
+
+  void markNotificationTapUiReady() {
+    _notificationTapUiReady = true;
+  }
+
+  List<ProjectXpNotificationTap>
+      takePendingNotificationTaps() {
+    final List<ProjectXpNotificationTap> pending =
+        List<ProjectXpNotificationTap>.from(
+      _pendingNotificationTaps,
+    );
+
+    _pendingNotificationTaps.clear();
+
+    return pending;
   }
 
   Future<String?> getFcmToken() async {
@@ -360,6 +571,16 @@ class AppNotificationService {
       return;
     }
 
+    if (_isAppInForeground) {
+      _emitInAppNotification(
+        title: title,
+        body: body,
+        payload: payload,
+      );
+
+      return;
+    }
+
     final bool allowed =
         await areSystemNotificationsEnabled();
 
@@ -431,12 +652,18 @@ class AppNotificationService {
   }
 
   Future<void> dispose() async {
+    WidgetsBinding.instance.removeObserver(this);
+
     await _tokenRefreshSubscription?.cancel();
     await _foregroundMessageSubscription?.cancel();
+    await _openedAppSubscription?.cancel();
 
     _tokenRefreshSubscription = null;
     _foregroundMessageSubscription = null;
+    _openedAppSubscription = null;
     _lastKnownFcmToken = null;
+    _notificationTapUiReady = false;
+    _pendingNotificationTaps.clear();
 
     _initialized = false;
   }

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../models/avatar_model.dart';
 import '../services/friend_alias_service.dart';
 import '../services/private_message_service.dart';
+import '../services/project_xp_communicator_ui_service.dart';
 import '../widgets/avatar_renderer.dart';
 import 'private_chat_screen.dart';
 
@@ -20,6 +21,37 @@ class MessagesScreen extends StatefulWidget {
 
 class _MessagesScreenState
     extends State<MessagesScreen> {
+  final Object _globalCommunicatorAlertToken =
+      Object();
+
+  bool _globalCommunicatorAlertSuppressed = false;
+
+  void _suppressGlobalCommunicatorAlert() {
+    if (_globalCommunicatorAlertSuppressed) {
+      return;
+    }
+
+    _globalCommunicatorAlertSuppressed = true;
+
+    ProjectXpCommunicatorUiService
+        .suppressGlobalCommunicatorAlert(
+      _globalCommunicatorAlertToken,
+    );
+  }
+
+  void _releaseGlobalCommunicatorAlert() {
+    if (!_globalCommunicatorAlertSuppressed) {
+      return;
+    }
+
+    _globalCommunicatorAlertSuppressed = false;
+
+    ProjectXpCommunicatorUiService
+        .releaseGlobalCommunicatorAlert(
+      _globalCommunicatorAlertToken,
+    );
+  }
+
   StreamSubscription<List<Map<String, dynamic>>>?
       _activitySubscription;
 
@@ -39,6 +71,11 @@ class _MessagesScreenState
   void initState() {
     super.initState();
 
+    // Cet écran appartient au Communicateur XP :
+    // le mini Communicateur global doit rester caché pendant toute sa vie,
+    // y compris après un retour arrière / une réouverture.
+    _suppressGlobalCommunicatorAlert();
+
     _loadInbox();
 
     _activitySubscription =
@@ -54,6 +91,8 @@ class _MessagesScreenState
   @override
   void dispose() {
     _activitySubscription?.cancel();
+
+    _releaseGlobalCommunicatorAlert();
 
     super.dispose();
   }
@@ -207,6 +246,8 @@ class _MessagesScreenState
           return PrivateChatScreen(
             friendId: friendId,
             displayName: name,
+            initialConversationId:
+                conversationId,
             avatarUrl:
                 avatarUrl.isEmpty
                     ? null

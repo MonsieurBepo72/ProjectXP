@@ -6,11 +6,13 @@ import 'package:flutter/services.dart';
 
 import '../services/app_audio_service.dart';
 import '../services/auth_service.dart';
-import '../services/computer_settings_service.dart';
 import '../services/compagnie_invitation_storage.dart';
 import '../services/compagnie_request_notification_sync.dart';
 import '../services/compagnie_request_storage.dart';
+import '../services/friend_service.dart';
+import '../services/private_message_service.dart';
 import '../services/online_presence_service.dart';
+import '../services/project_xp_communicator_ui_service.dart';
 import 'computer_screen.dart';
 import 'phone_home_screen.dart';
 import 'compagnie_screen.dart';
@@ -26,7 +28,7 @@ class HallScreen extends StatefulWidget {
 }
 
 class _HallScreenState extends State<HallScreen>
-    with WidgetsBindingObserver {
+    with WidgetsBindingObserver, RouteAware {
   // ===========================================================================
   // REPÈRE LOGIQUE DU HALL
   //
@@ -121,13 +123,60 @@ class _HallScreenState extends State<HallScreen>
   // ===========================================================================
 
   int _pendingCompagnieActivityCount = 0;
+  int _unreadPrivateMessageCount = 0;
+  int _incomingFriendRequestCount = 0;
+
+  StreamSubscription<int>?
+      _privateMessageUnreadSubscription;
+
+  StreamSubscription<int>?
+      _friendRequestCountSubscription;
 
   int get _unreadNotificationCount {
-    if (!ComputerSettingsService.current.notificationsEnabled) {
-      return 0;
+    return _pendingCompagnieActivityCount +
+        _unreadPrivateMessageCount +
+        _incomingFriendRequestCount;
+  }
+
+  String get _unreadNotificationLabel {
+    if (_unreadNotificationCount > 99) {
+      return '99+';
     }
 
-    return _pendingCompagnieActivityCount;
+    return _unreadNotificationCount.toString();
+  }
+
+  final Object _globalCommunicatorAlertToken =
+      Object();
+
+  PageRoute<dynamic>? _hallRoute;
+
+  bool _hallAlertSuppressed = false;
+
+  void _suppressGlobalCommunicatorAlert() {
+    if (_hallAlertSuppressed) {
+      return;
+    }
+
+    _hallAlertSuppressed = true;
+
+    ProjectXpCommunicatorUiService
+        .suppressGlobalCommunicatorAlert(
+      _globalCommunicatorAlertToken,
+    );
+  }
+
+  void _releaseGlobalCommunicatorAlert() {
+    if (!_hallAlertSuppressed) {
+      return;
+    }
+
+    _hallAlertSuppressed = false;
+
+    ProjectXpCommunicatorUiService
+        .releaseGlobalCommunicatorAlert(
+      _globalCommunicatorAlertToken,
+    );
   }
 
   // ===========================================================================
@@ -160,6 +209,7 @@ class _HallScreenState extends State<HallScreen>
     WidgetsBinding.instance.addPostFrameCallback(
       (_) {
         _refreshCompagniePhone();
+        _startPhoneRealtimeCounters();
       },
     );
 
@@ -180,9 +230,80 @@ class _HallScreenState extends State<HallScreen>
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+
+    final ModalRoute<dynamic>? modalRoute =
+        ModalRoute.of(
+      context,
+    );
+
+    if (modalRoute is! PageRoute<dynamic>) {
+      return;
+    }
+
+    if (_hallRoute != modalRoute) {
+      if (_hallRoute != null) {
+        projectXpRouteObserver.unsubscribe(
+          this,
+        );
+      }
+
+      _hallRoute = modalRoute;
+
+      projectXpRouteObserver.subscribe(
+        this,
+        modalRoute,
+      );
+    }
+
+    if (modalRoute.isCurrent) {
+      _suppressGlobalCommunicatorAlert();
+
+      ProjectXpCommunicatorUiService
+          .markNavigationReady();
+    }
+  }
+
+  @override
+  void didPush() {
+    _suppressGlobalCommunicatorAlert();
+
+    ProjectXpCommunicatorUiService
+        .markNavigationReady();
+  }
+
+  @override
+  void didPopNext() {
+    _suppressGlobalCommunicatorAlert();
+
+    ProjectXpCommunicatorUiService
+        .markNavigationReady();
+  }
+
+  @override
+  void didPushNext() {
+    _releaseGlobalCommunicatorAlert();
+  }
+
+  @override
+  void didPop() {
+    _releaseGlobalCommunicatorAlert();
+  }
+
+  @override
   void dispose() {
+    projectXpRouteObserver.unsubscribe(
+      this,
+    );
+
+    _releaseGlobalCommunicatorAlert();
+
     WidgetsBinding.instance.removeObserver(this);
     _hallClockTimer?.cancel();
+
+    _privateMessageUnreadSubscription?.cancel();
+    _friendRequestCountSubscription?.cancel();
 
     unawaited(
       OnlinePresenceService.instance.stop(),
@@ -202,6 +323,69 @@ class _HallScreenState extends State<HallScreen>
     setState(() {
       _hallClock = DateTime.now();
     });
+
+    unawaited(
+      _refreshCompagniePhone(),
+    );
+  }
+
+  // ===========================================================================
+  // COMPTEURS REALTIME DU COMMUNICATEUR
+  // ===========================================================================
+
+  void _startPhoneRealtimeCounters() {
+    _privateMessageUnreadSubscription?.cancel();
+    _friendRequestCountSubscription?.cancel();
+
+    _privateMessageUnreadSubscription =
+        PrivateMessageService
+            .unreadCountStream()
+            .listen(
+      (
+        int count,
+      ) {
+        if (!mounted) {
+          return;
+        }
+
+        setState(() {
+          _unreadPrivateMessageCount =
+              count < 0 ? 0 : count;
+        });
+      },
+      onError: (
+        Object error,
+      ) {
+        debugPrint(
+          'Compteur messages privés du Hall indisponible : $error',
+        );
+      },
+    );
+
+    _friendRequestCountSubscription =
+        FriendService
+            .incomingRequestCountStream()
+            .listen(
+      (
+        int count,
+      ) {
+        if (!mounted) {
+          return;
+        }
+
+        setState(() {
+          _incomingFriendRequestCount =
+              count < 0 ? 0 : count;
+        });
+      },
+      onError: (
+        Object error,
+      ) {
+        debugPrint(
+          'Compteur demandes d’amis du Hall indisponible : $error',
+        );
+      },
+    );
   }
 
   // ===========================================================================
@@ -581,35 +765,65 @@ class _HallScreenState extends State<HallScreen>
                               right: -5,
                               top: -8,
                               child: IgnorePointer(
-                                child: Container(
-                                  constraints: const BoxConstraints(
-                                    minWidth: 31,
-                                    minHeight: 31,
+                                child: TweenAnimationBuilder<double>(
+                                  key: ValueKey<int>(
+                                    _unreadNotificationCount,
                                   ),
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 7,
+                                  tween: Tween<double>(
+                                    begin: 0.72,
+                                    end: 1,
                                   ),
-                                  decoration: BoxDecoration(
-                                    color: Colors.redAccent,
-                                    shape: BoxShape.circle,
-                                    border: Border.all(
-                                      color: Colors.white,
-                                      width: 2,
+                                  duration: const Duration(
+                                    milliseconds: 420,
+                                  ),
+                                  curve: Curves.elasticOut,
+                                  builder: (
+                                    BuildContext context,
+                                    double scale,
+                                    Widget? child,
+                                  ) {
+                                    return Transform.scale(
+                                      scale: scale,
+                                      child: child,
+                                    );
+                                  },
+                                  child: Container(
+                                    constraints: const BoxConstraints(
+                                      minWidth: 31,
+                                      minHeight: 31,
                                     ),
-                                    boxShadow: const [
-                                      BoxShadow(
-                                        color: Colors.black54,
-                                        blurRadius: 7,
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 7,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: Colors.redAccent,
+                                      shape: BoxShape.circle,
+                                      border: Border.all(
+                                        color: Colors.white,
+                                        width: 2,
                                       ),
-                                    ],
-                                  ),
-                                  alignment: Alignment.center,
-                                  child: Text(
-                                    _unreadNotificationCount.toString(),
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.bold,
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Colors.redAccent.withValues(
+                                            alpha: 0.48,
+                                          ),
+                                          blurRadius: 14,
+                                          spreadRadius: 2,
+                                        ),
+                                        const BoxShadow(
+                                          color: Colors.black54,
+                                          blurRadius: 7,
+                                        ),
+                                      ],
+                                    ),
+                                    alignment: Alignment.center,
+                                    child: Text(
+                                      _unreadNotificationLabel,
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.bold,
+                                      ),
                                     ),
                                   ),
                                 ),
@@ -994,10 +1208,9 @@ class _HallScreenState extends State<HallScreen>
   Future<void> _openPhone() async {
     AppAudioService.instance.notificationFeedback();
 
-    if (_pendingCompagnieActivityCount > 0 &&
-        ComputerSettingsService.current.notificationsEnabled) {
+    if (_unreadNotificationCount > 0) {
       _setBjornMessage(
-        'Ton Communicateur XP contient une nouvelle activité Compagnie.',
+        'Ton Communicateur XP a de nouvelles activités.',
       );
     } else {
       _setBjornMessage(

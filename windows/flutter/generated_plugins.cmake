@@ -6,8 +6,10 @@ list(APPEND FLUTTER_PLUGIN_LIST
   app_links
   audioplayers_windows
   battery_plus
+  connectivity_plus
   file_selector_windows
   firebase_core
+  flutter_blue_plus_winrt
   local_auth_windows
   url_launcher_windows
 )

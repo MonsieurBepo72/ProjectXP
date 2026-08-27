@@ -1,11 +1,15 @@
 import 'dart:async';
 
 import 'package:battery_plus/battery_plus.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../services/device_status_service.dart';
 import '../services/friend_service.dart';
 import '../services/private_message_service.dart';
+import '../services/project_xp_communicator_ui_service.dart';
 import 'friend_requests_screen.dart';
 import 'friends_screen.dart';
 import 'messages_screen.dart';
@@ -22,14 +26,54 @@ class PhoneHomeScreen extends StatefulWidget {
 
 class _PhoneHomeScreenState
     extends State<PhoneHomeScreen>
-    with WidgetsBindingObserver {
+    with WidgetsBindingObserver, RouteAware {
+  final Object _globalCommunicatorAlertToken =
+      Object();
+
+  PageRoute<dynamic>? _phoneRoute;
+  bool _globalCommunicatorAlertSuppressed = false;
+
+  void _suppressGlobalCommunicatorAlert() {
+    if (_globalCommunicatorAlertSuppressed) {
+      return;
+    }
+
+    _globalCommunicatorAlertSuppressed = true;
+
+    ProjectXpCommunicatorUiService
+        .suppressGlobalCommunicatorAlert(
+      _globalCommunicatorAlertToken,
+    );
+  }
+
+  void _releaseGlobalCommunicatorAlert() {
+    if (!_globalCommunicatorAlertSuppressed) {
+      return;
+    }
+
+    _globalCommunicatorAlertSuppressed = false;
+
+    ProjectXpCommunicatorUiService
+        .releaseGlobalCommunicatorAlert(
+      _globalCommunicatorAlertToken,
+    );
+  }
+
   final Battery _battery =
       Battery();
 
   Timer? _clockTimer;
 
+  Timer? _deviceStatusTimer;
+
   StreamSubscription<BatteryState>?
       _batteryStateSubscription;
+
+  StreamSubscription<List<ConnectivityResult>>?
+      _connectivitySubscription;
+
+  StreamSubscription<BluetoothAdapterState>?
+      _bluetoothStateSubscription;
 
   DateTime _now =
       DateTime.now();
@@ -39,48 +83,151 @@ class _PhoneHomeScreenState
   BatteryState _batteryState =
       BatteryState.unknown;
 
+  List<ConnectivityResult> _connectivity =
+      const <ConnectivityResult>[];
+
+  BluetoothAdapterState _bluetoothState =
+      BluetoothAdapterState.unknown;
+
+  DeviceStatusSnapshot _deviceStatus =
+      DeviceStatusSnapshot.unsupported(
+    platform: 'android',
+  );
+
   @override
   void initState() {
     super.initState();
+
+    ProjectXpCommunicatorUiService
+        .setCommunicatorSessionActive(
+      true,
+    );
+
+    _suppressGlobalCommunicatorAlert();
 
     WidgetsBinding.instance.addObserver(
       this,
     );
 
-    // Le Communicateur XP se comporte comme un vrai téléphone plein écran :
-    // on masque temporairement les barres système Android/iOS pour éviter
-    // d'afficher deux fois l'heure et la batterie.
-    SystemChrome.setEnabledSystemUIMode(
-      SystemUiMode.immersiveSticky,
+    // Le Communicateur XP possède sa propre barre d'état.
+    // On masque donc les barres système uniquement sur cet écran.
+    unawaited(
+      _enterCommunicatorMode(),
     );
 
     _startClock();
     _initializeBattery();
+    _initializeConnectivity();
+    _initializeBluetooth();
+    _initializeDeviceStatus();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+
+    final ModalRoute<dynamic>? modalRoute =
+        ModalRoute.of(
+      context,
+    );
+
+    if (modalRoute is! PageRoute<dynamic>) {
+      return;
+    }
+
+    if (_phoneRoute != modalRoute) {
+      if (_phoneRoute != null) {
+        projectXpRouteObserver.unsubscribe(
+          this,
+        );
+      }
+
+      _phoneRoute = modalRoute;
+
+      projectXpRouteObserver.subscribe(
+        this,
+        modalRoute,
+      );
+    }
+
+    if (modalRoute.isCurrent) {
+      _suppressGlobalCommunicatorAlert();
+
+      ProjectXpCommunicatorUiService
+          .setCommunicatorSessionActive(
+        true,
+      );
+    }
+  }
+
+  @override
+  void didPush() {
+    _suppressGlobalCommunicatorAlert();
+
+    ProjectXpCommunicatorUiService
+        .setCommunicatorSessionActive(
+      true,
+    );
+  }
+
+  @override
+  void didPopNext() {
+    _suppressGlobalCommunicatorAlert();
+
+    ProjectXpCommunicatorUiService
+        .setCommunicatorSessionActive(
+      true,
+    );
+  }
+
+  @override
+  void didPushNext() {
+    _releaseGlobalCommunicatorAlert();
+
+    ProjectXpCommunicatorUiService
+        .setCommunicatorSessionActive(
+      false,
+    );
+  }
+
+  @override
+  void didPop() {
+    _releaseGlobalCommunicatorAlert();
+
+    ProjectXpCommunicatorUiService
+        .setCommunicatorSessionActive(
+      false,
+    );
   }
 
   @override
   void dispose() {
+    projectXpRouteObserver.unsubscribe(
+      this,
+    );
+
     WidgetsBinding.instance.removeObserver(
       this,
     );
 
     _clockTimer?.cancel();
+    _deviceStatusTimer?.cancel();
 
     _batteryStateSubscription?.cancel();
+    _connectivitySubscription?.cancel();
+    _bluetoothStateSubscription?.cancel();
 
-    // On rend les barres système au Hall dès que l'utilisateur range
-    // le Communicateur XP.
-    SystemChrome.setEnabledSystemUIMode(
-      SystemUiMode.edgeToEdge,
+    // Dès que le Communicateur XP est rangé, Android/iOS reprend
+    // immédiatement le contrôle de sa vraie barre système.
+    unawaited(
+      _restoreSystemBars(),
     );
 
-    SystemChrome.setSystemUIOverlayStyle(
-      const SystemUiOverlayStyle(
-        statusBarColor: Colors.transparent,
-        systemNavigationBarColor: Colors.transparent,
-        statusBarIconBrightness: Brightness.light,
-        systemNavigationBarIconBrightness: Brightness.light,
-      ),
+    _releaseGlobalCommunicatorAlert();
+
+    ProjectXpCommunicatorUiService
+        .setCommunicatorSessionActive(
+      false,
     );
 
     super.dispose();
@@ -93,7 +240,78 @@ class _PhoneHomeScreenState
     if (state == AppLifecycleState.resumed) {
       _refreshTime();
       _refreshBatteryLevel();
+      _refreshConnectivity();
+      _refreshBluetooth();
+      _refreshDeviceStatus();
+
+      final ModalRoute<dynamic>? route =
+          ModalRoute.of(context);
+
+      if (route?.isCurrent ?? false) {
+        unawaited(
+          _enterCommunicatorMode(),
+        );
+      }
     }
+  }
+
+  // ===========================================================================
+  // BARRES SYSTÈME / MODE COMMUNICATEUR
+  // ===========================================================================
+
+  Future<void> _enterCommunicatorMode() async {
+    await SystemChrome.setEnabledSystemUIMode(
+      SystemUiMode.immersiveSticky,
+    );
+  }
+
+  Future<void> _restoreSystemBars() async {
+    await SystemChrome.setEnabledSystemUIMode(
+      SystemUiMode.manual,
+      overlays: SystemUiOverlay.values,
+    );
+
+    SystemChrome.setSystemUIOverlayStyle(
+      const SystemUiOverlayStyle(
+        statusBarColor: Colors.transparent,
+        systemNavigationBarColor: Colors.transparent,
+        statusBarIconBrightness: Brightness.light,
+        systemNavigationBarIconBrightness: Brightness.light,
+        systemNavigationBarDividerColor: Colors.transparent,
+      ),
+    );
+  }
+
+  Future<void> _openPhoneApp(
+    Widget screen,
+  ) async {
+    // Les applications ouvertes depuis le Communicateur ne sont plus
+    // "dans le téléphone" visuellement : on rend donc la vraie barre
+    // Android/iOS avant d'afficher l'écran.
+    await _restoreSystemBars();
+
+    if (!mounted) {
+      return;
+    }
+
+    await Navigator.push<void>(
+      context,
+      MaterialPageRoute<void>(
+        builder: (
+          BuildContext context,
+        ) {
+          return screen;
+        },
+      ),
+    );
+
+    // Retour sur l'accueil du Communicateur :
+    // on remasque immédiatement les barres système.
+    if (!mounted) {
+      return;
+    }
+
+    await _enterCommunicatorMode();
   }
 
   // ===========================================================================
@@ -252,7 +470,398 @@ class _PhoneHomeScreenState
       return Icons.battery_charging_full;
     }
 
+    if (_deviceStatus.powerSaveMode ==
+        true) {
+      return Icons.battery_saver_rounded;
+    }
+
     return Icons.battery_full;
+  }
+
+  String get _batteryTooltip {
+    if (_isCharging) {
+      return 'Batterie en charge';
+    }
+
+    if (_deviceStatus.powerSaveMode ==
+        true) {
+      return 'Économie d’énergie activée';
+    }
+
+    return 'Batterie';
+  }
+
+  // ===========================================================================
+  // RÉSEAU RÉEL
+  // ===========================================================================
+
+  Future<void> _initializeConnectivity() async {
+    await _refreshConnectivity();
+
+    _connectivitySubscription =
+        Connectivity()
+            .onConnectivityChanged
+            .listen(
+      (
+        List<ConnectivityResult> results,
+      ) {
+        if (!mounted) {
+          return;
+        }
+
+        setState(() {
+          _connectivity = results;
+        });
+      },
+    );
+  }
+
+  Future<void> _refreshConnectivity() async {
+    try {
+      final List<ConnectivityResult> results =
+          await Connectivity().checkConnectivity();
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _connectivity = results;
+      });
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _connectivity =
+            const <ConnectivityResult>[];
+      });
+    }
+  }
+
+  bool get _hasWifi {
+    return _connectivity.contains(
+      ConnectivityResult.wifi,
+    );
+  }
+
+  bool get _hasMobile {
+    return _connectivity.contains(
+      ConnectivityResult.mobile,
+    );
+  }
+
+  bool get _hasEthernet {
+    return _connectivity.contains(
+      ConnectivityResult.ethernet,
+    );
+  }
+
+  bool get _hasNetwork {
+    return _connectivity.any(
+      (
+        ConnectivityResult result,
+      ) =>
+          result !=
+          ConnectivityResult.none,
+    );
+  }
+
+  IconData get _networkIcon {
+    if (_hasWifi) {
+      return Icons.wifi_rounded;
+    }
+
+    if (_hasMobile) {
+      return Icons.signal_cellular_alt_rounded;
+    }
+
+    if (_hasEthernet) {
+      return Icons.settings_ethernet_rounded;
+    }
+
+    return Icons.signal_wifi_off_rounded;
+  }
+
+  String get _networkLabel {
+    if (_hasWifi) {
+      return 'Wi-Fi';
+    }
+
+    if (_hasMobile) {
+      return 'Mobile';
+    }
+
+    if (_hasEthernet) {
+      return 'Ethernet';
+    }
+
+    return 'Hors ligne';
+  }
+
+  // ===========================================================================
+  // BLUETOOTH RÉEL
+  // ===========================================================================
+
+  Future<void> _initializeBluetooth() async {
+    await _refreshBluetooth();
+
+    _bluetoothStateSubscription =
+        FlutterBluePlus.adapterState.listen(
+      (
+        BluetoothAdapterState state,
+      ) {
+        if (!mounted) {
+          return;
+        }
+
+        setState(() {
+          _bluetoothState = state;
+        });
+      },
+      onError: (_) {
+        if (!mounted) {
+          return;
+        }
+
+        setState(() {
+          _bluetoothState =
+              BluetoothAdapterState.unknown;
+        });
+      },
+    );
+  }
+
+  Future<void> _refreshBluetooth() async {
+    try {
+      final BluetoothAdapterState state =
+          FlutterBluePlus.adapterStateNow;
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _bluetoothState = state;
+      });
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _bluetoothState =
+            BluetoothAdapterState.unknown;
+      });
+    }
+  }
+
+  bool get _bluetoothEnabled {
+    return _bluetoothState ==
+        BluetoothAdapterState.on;
+  }
+
+  // ===========================================================================
+  // ÉTATS SYSTÈME RÉELS DU TÉLÉPHONE
+  // ===========================================================================
+
+  void _initializeDeviceStatus() {
+    _refreshDeviceStatus();
+
+    _deviceStatusTimer =
+        Timer.periodic(
+      const Duration(
+        seconds: 2,
+      ),
+      (_) {
+        _refreshDeviceStatus();
+      },
+    );
+  }
+
+  Future<void> _refreshDeviceStatus() async {
+    final DeviceStatusSnapshot snapshot =
+        await DeviceStatusService
+            .instance
+            .getSnapshot();
+
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _deviceStatus = snapshot;
+    });
+  }
+
+  String _formatAlarmTime(
+    DateTime alarm,
+  ) {
+    final String hour =
+        alarm.hour
+            .toString()
+            .padLeft(
+              2,
+              '0',
+            );
+
+    final String minute =
+        alarm.minute
+            .toString()
+            .padLeft(
+              2,
+              '0',
+            );
+
+    return '$hour:$minute';
+  }
+
+  List<Widget> _buildNativeModeIcons() {
+    final List<Widget> icons =
+        <Widget>[];
+
+    void addMode({
+      required IconData icon,
+      required String tooltip,
+      Color color = Colors.white70,
+    }) {
+      if (icons.isNotEmpty) {
+        icons.add(
+          const SizedBox(
+            width: 5,
+          ),
+        );
+      }
+
+      icons.add(
+        Tooltip(
+          message: tooltip,
+          child: Icon(
+            icon,
+            color: color,
+            size: 15,
+          ),
+        ),
+      );
+    }
+
+    if (_deviceStatus
+            .screenRecordingActive ==
+        true) {
+      addMode(
+        icon:
+            Icons.fiber_manual_record_rounded,
+        tooltip:
+            'Enregistrement d’écran actif',
+        color:
+            Colors.redAccent,
+      );
+    }
+
+    if (_deviceStatus.airplaneMode ==
+        true) {
+      addMode(
+        icon:
+            Icons.flight_rounded,
+        tooltip:
+            'Mode avion activé',
+      );
+    }
+
+    if (_deviceStatus.dndEnabled) {
+      addMode(
+        icon:
+            Icons.do_not_disturb_on_rounded,
+        tooltip:
+            'Ne pas déranger activé',
+      );
+    }
+
+    if (_deviceStatus.isSilent) {
+      addMode(
+        icon:
+            Icons.volume_off_rounded,
+        tooltip:
+            'Téléphone en silencieux',
+      );
+    } else if (_deviceStatus.isVibrate) {
+      addMode(
+        icon:
+            Icons.vibration_rounded,
+        tooltip:
+            'Téléphone en vibreur',
+      );
+    }
+
+    if (_deviceStatus.dataSaverEnabled) {
+      addMode(
+        icon:
+            Icons.data_saver_on_rounded,
+        tooltip:
+            'Économiseur de données activé',
+      );
+    }
+
+    if (_deviceStatus.vpnActive ==
+        true) {
+      addMode(
+        icon:
+            Icons.vpn_key_rounded,
+        tooltip:
+            'VPN actif',
+      );
+    }
+
+    if (_deviceStatus.nfcEnabled ==
+        true) {
+      addMode(
+        icon:
+            Icons.nfc_rounded,
+        tooltip:
+            'NFC activé',
+      );
+    }
+
+    if (_deviceStatus.hotspotReadable &&
+        _deviceStatus.hotspotActive ==
+            true) {
+      addMode(
+        icon:
+            Icons.wifi_tethering_rounded,
+        tooltip:
+            'Point d’accès personnel actif',
+      );
+    }
+
+    // Comme sur beaucoup de téléphones Android, on n'affiche
+    // rien quand la rotation automatique est active. En revanche,
+    // si elle est désactivée, on montre clairement un verrouillage
+    // d'orientation — pas une icône ambiguë de rotation.
+    if (_deviceStatus.rotationLocked ==
+        false) {
+      addMode(
+        icon:
+            Icons.screen_lock_portrait_rounded,
+        tooltip:
+            'Rotation automatique désactivée',
+      );
+    }
+
+    final DateTime? nextAlarm =
+        _deviceStatus.nextAlarmAt;
+
+    if (nextAlarm != null) {
+      addMode(
+        icon:
+            Icons.alarm_rounded,
+        tooltip:
+            'Prochaine alarme : '
+            '${_formatAlarmTime(nextAlarm)}',
+      );
+    }
+
+    return icons;
   }
 
   // ===========================================================================
@@ -260,41 +869,20 @@ class _PhoneHomeScreenState
   // ===========================================================================
 
   Future<void> _openFriends() async {
-    await Navigator.push<void>(
-      context,
-      MaterialPageRoute<void>(
-        builder: (
-          BuildContext context,
-        ) {
-          return const FriendsScreen();
-        },
-      ),
+    await _openPhoneApp(
+      const FriendsScreen(),
     );
   }
 
   Future<void> _openFriendRequests() async {
-    await Navigator.push<void>(
-      context,
-      MaterialPageRoute<void>(
-        builder: (
-          BuildContext context,
-        ) {
-          return const FriendRequestsScreen();
-        },
-      ),
+    await _openPhoneApp(
+      const FriendRequestsScreen(),
     );
   }
 
   Future<void> _openMessages() async {
-    await Navigator.push<void>(
-      context,
-      MaterialPageRoute<void>(
-        builder: (
-          BuildContext context,
-        ) {
-          return const MessagesScreen();
-        },
-      ),
+    await _openPhoneApp(
+      const MessagesScreen(),
     );
   }
 
@@ -348,6 +936,7 @@ class _PhoneHomeScreenState
           child: Column(
             children: [
               _buildStatusBar(),
+              _buildTopNavigation(),
 
               Expanded(
                 child:
@@ -410,7 +999,11 @@ class _PhoneHomeScreenState
   }
 
   // ===========================================================================
-  // BARRE D'ÉTAT
+  // BARRE D'ÉTAT DU COMMUNICATEUR
+  //
+  // Heure + batterie sont déjà réelles.
+  // Les prochains indicateurs (réseau réel, Bluetooth, alarme, etc.)
+  // seront branchés sur les états natifs du téléphone : aucun faux état.
   // ===========================================================================
 
   Widget _buildStatusBar() {
@@ -419,13 +1012,16 @@ class _PhoneHomeScreenState
             ? '--%'
             : '${_batteryLevel!}%';
 
+    final List<Widget> nativeIcons =
+        _buildNativeModeIcons();
+
     return Padding(
       padding:
           const EdgeInsets.fromLTRB(
         16,
         8,
         12,
-        4,
+        2,
       ),
       child: Row(
         children: [
@@ -441,43 +1037,157 @@ class _PhoneHomeScreenState
             ),
           ),
 
-          const Spacer(),
-
-          const Icon(
-            Icons.wifi,
-            color:
-                Colors.white70,
-            size: 16,
-          ),
-
           const SizedBox(
-            width: 6,
+            width: 8,
           ),
 
-          Text(
-            batteryText,
-            style:
-                const TextStyle(
+          Expanded(
+            child: Align(
+              alignment:
+                  Alignment.centerRight,
+              child: FittedBox(
+                fit:
+                    BoxFit.scaleDown,
+                alignment:
+                    Alignment.centerRight,
+                child: Row(
+                  mainAxisSize:
+                      MainAxisSize.min,
+                  children: [
+                    ...nativeIcons,
+
+                    if (nativeIcons
+                        .isNotEmpty)
+                      const SizedBox(
+                        width: 6,
+                      ),
+
+                    if (_bluetoothEnabled) ...[
+                      const Tooltip(
+                        message:
+                            'Bluetooth activé',
+                        child: Icon(
+                          Icons
+                              .bluetooth_rounded,
+                          color:
+                              Colors.white70,
+                          size: 15,
+                        ),
+                      ),
+                      const SizedBox(
+                        width: 6,
+                      ),
+                    ],
+
+                    Tooltip(
+                      message:
+                          _networkLabel,
+                      child: Icon(
+                        _networkIcon,
+                        color: _hasNetwork
+                            ? Colors.white70
+                            : Colors.white38,
+                        size: 16,
+                      ),
+                    ),
+
+                    const SizedBox(
+                      width: 7,
+                    ),
+
+                    Text(
+                      batteryText,
+                      style:
+                          const TextStyle(
+                        color:
+                            Colors.white70,
+                        fontSize: 12,
+                        fontWeight:
+                            FontWeight.w600,
+                      ),
+                    ),
+
+                    const SizedBox(
+                      width: 3,
+                    ),
+
+                    Tooltip(
+                      message:
+                          _batteryTooltip,
+                      child: Icon(
+                        _batteryIcon,
+                        color: _isCharging ||
+                                _deviceStatus
+                                        .powerSaveMode ==
+                                    true
+                            ? const Color(
+                                0xffffd27a,
+                              )
+                            : Colors.white70,
+                        size: 19,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTopNavigation() {
+    return Padding(
+      padding:
+          const EdgeInsets.fromLTRB(
+        8,
+        2,
+        8,
+        0,
+      ),
+      child: Row(
+        children: [
+          IconButton(
+            tooltip:
+                'Retour',
+            onPressed: () async {
+              await _restoreSystemBars();
+
+              if (!mounted) {
+                return;
+              }
+
+              await Navigator.maybePop(
+                context,
+              );
+            },
+            icon: const Icon(
+              Icons.arrow_back_rounded,
               color:
                   Colors.white70,
-              fontSize: 12,
-              fontWeight:
-                  FontWeight.w600,
             ),
           ),
 
-          const SizedBox(
-            width: 3,
+          const Spacer(),
+
+          const Text(
+            'Communicateur',
+            style:
+                TextStyle(
+              color:
+                  Colors.white54,
+              fontSize: 12,
+              fontWeight:
+                  FontWeight.w600,
+              letterSpacing: 0.4,
+            ),
           ),
 
-          Icon(
-            _batteryIcon,
-            color: _isCharging
-                ? const Color(
-                    0xffffd27a,
-                  )
-                : Colors.white70,
-            size: 19,
+          const Spacer(),
+
+          const SizedBox(
+            width: 48,
           ),
         ],
       ),
@@ -688,48 +1398,24 @@ class _PhoneHomeScreenState
         14,
         10,
       ),
-      child: Row(
-        children: [
-          IconButton(
-            tooltip:
-                'Retour',
-            onPressed: () {
-              Navigator.maybePop(
-                context,
-              );
-            },
-            icon: const Icon(
-              Icons.arrow_back_rounded,
-              color:
-                  Colors.white54,
+      child: Center(
+        child: Container(
+          width: 84,
+          height: 4,
+          decoration:
+              BoxDecoration(
+            color:
+                Colors.white24,
+            borderRadius:
+                BorderRadius.circular(
+              999,
             ),
           ),
-
-          const Spacer(),
-
-          Container(
-            width: 84,
-            height: 4,
-            decoration:
-                BoxDecoration(
-              color:
-                  Colors.white24,
-              borderRadius:
-                  BorderRadius.circular(
-                999,
-              ),
-            ),
-          ),
-
-          const Spacer(),
-
-          const SizedBox(
-            width: 48,
-          ),
-        ],
+        ),
       ),
     );
   }
+
 }
 
 // =============================================================================

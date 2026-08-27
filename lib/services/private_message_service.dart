@@ -1,3 +1,5 @@
+import 'content_moderation_service.dart';
+import 'project_xp_message_send_result.dart';
 import 'supabase_service.dart';
 
 class PrivateMessageService {
@@ -148,7 +150,7 @@ class PrivateMessageService {
   // ENVOYER UN MESSAGE
   // ===========================================================================
 
-  static Future<bool> sendMessage({
+  static Future<ProjectXpMessageSendResult> sendMessage({
     required String conversationId,
     required String content,
   }) async {
@@ -166,26 +168,60 @@ class PrivateMessageService {
         cleanConversationId.isEmpty ||
         cleanContent.isEmpty ||
         cleanContent.length > 2000) {
-      return false;
+      return ProjectXpMessageSendResult.failure;
+    }
+
+    // Premier bouclier local pour les termes critiques déjà connus.
+    final ContentModerationResult localModeration =
+        ContentModerationService.checkTextImmediate(
+      cleanContent,
+    );
+
+    if (localModeration.blocked) {
+      return ProjectXpMessageSendResult.denied;
     }
 
     try {
-      await SupabaseService.client
-          .from('private_messages')
-          .insert(
-        {
+      final response =
+          await SupabaseService.client.functions.invoke(
+        'send-moderated-message',
+        body: <String, dynamic>{
+          'surface': 'private',
           'conversation_id':
               cleanConversationId,
-          'sender_id':
-              userId,
           'content':
               cleanContent,
         },
       );
 
-      return true;
+      final dynamic rawData =
+          response.data;
+
+      final Map<String, dynamic> data =
+          rawData is Map
+              ? Map<String, dynamic>.from(
+                  rawData,
+                )
+              : <String, dynamic>{};
+
+      final String status =
+          data['status']
+                  ?.toString()
+                  .trim() ??
+              '';
+
+      switch (status) {
+        case 'sent':
+          return ProjectXpMessageSendResult.success;
+
+        case 'blocked':
+          return ProjectXpMessageSendResult.denied;
+
+        default:
+          return ProjectXpMessageSendResult.failure;
+      }
     } catch (_) {
-      return false;
+      return ProjectXpMessageSendResult.failure;
     }
   }
 
