@@ -21,7 +21,7 @@ const OPENAI_MODERATION_MODEL =
 const MAX_CONTENT_LENGTH = 2000;
 
 const MODERATION_PIPELINE_VERSION =
-  '2.4.4';
+  '2.4.6.2';
 
 const BUNDLED_PROFANITY_LANGUAGES =
   new Set<string>([
@@ -201,6 +201,157 @@ type BundledProfanitySignal = {
   matched: boolean;
   obfuscated: boolean;
   detectedLanguages: string[];
+};
+
+type ModernSlangSignal = {
+  blocked: boolean;
+  category:
+    | 'modern_slang_directed'
+    | 'modern_slang_obfuscated'
+    | 'self_harm_directive'
+    | 'none';
+};
+
+const MODERN_DIRECTED_TERMS =
+  new Set<string>([
+    'pnj',
+    'npc',
+    'bot',
+    'clown',
+    'bouffon',
+    'boloss',
+    'cassos',
+    'teube',
+    'simp',
+    'bop',
+    'thot',
+    'hoe',
+    'loser',
+    'noob',
+    'goofy',
+    'glazer',
+    'unc',
+    'pick me',
+    'low iq',
+    'zero iq',
+    'brainrot',
+    'bozo',
+    'golem',
+    'golmon',
+    'matrixe',
+    'fraude',
+    'random',
+    'corny',
+  ]);
+
+const MODERN_MILD_MOCKERY =
+  new Set<string>([
+    'cringe',
+    'mid',
+    'cooked',
+    'zero aura',
+    'negative aura',
+    'skill issue',
+    'ratio',
+    'touch grass',
+    'glazing',
+    'chopped',
+  ]);
+
+const STRONG_ABBREVIATIONS =
+  new Set<string>([
+    'fdp',
+    'ntm',
+    'ftg',
+    'tg',
+    'vtff',
+    'stfu',
+  ]);
+
+const STRONG_FULL_WORD_INSULTS =
+  new Set<string>([
+    'connard',
+    'connasse',
+    'salope',
+    'pute',
+    'enfoire',
+    'batard',
+    'tocard',
+    'crevard',
+    'ordure',
+    'merdeux',
+    'merdeuse',
+  ]);
+
+const CONTEXTUAL_FULL_WORD_INSULTS =
+  new Set<string>([
+    'con',
+    'conne',
+    'debile',
+    'idiot',
+    'idiote',
+    'cretin',
+    'cretine',
+    'abruti',
+    'abrutie',
+    'minable',
+  ]);
+
+const CONTEXTUAL_FULL_PHRASE_INSULTS =
+  new Set<string>([
+    'fils de pute',
+    'fille de pute',
+    'trou du cul',
+    'sac a merde',
+    'sous merde',
+  ]);
+
+const SELF_HARM_DIRECTIVES =
+  new Set<string>([
+    'kill yourself',
+    'go kill yourself',
+    'suicide toi',
+    'suicidez vous',
+    'tue toi',
+    'tuez vous',
+    'va te pendre',
+    'vas te pendre',
+    'allez vous pendre',
+  ]);
+
+const INTENSIFIERS =
+  new Set<string>([
+    'sale',
+    'gros',
+    'grosse',
+    'espece de',
+    'pauvre',
+    'putain de',
+    'vieux',
+    'vieille',
+  ]);
+
+const CONFUSABLES:
+  Record<string, string> = {
+  'а': 'a',
+  'е': 'e',
+  'о': 'o',
+  'р': 'p',
+  'с': 'c',
+  'х': 'x',
+  'у': 'y',
+  'і': 'i',
+  'ј': 'j',
+  'к': 'k',
+  'м': 'm',
+  'т': 't',
+  'в': 'b',
+  'α': 'a',
+  'ο': 'o',
+  'ρ': 'p',
+  'χ': 'x',
+  'κ': 'k',
+  'τ': 't',
 };
 
 Deno.serve(async (req: Request) => {
@@ -422,6 +573,11 @@ Deno.serve(async (req: Request) => {
       content,
     );
 
+  const modernSlangSignal =
+    scanModernSlangV246(
+      content,
+    );
+
   if (surface === 'tavern') {
     const channelId =
       cleanString(
@@ -472,6 +628,7 @@ Deno.serve(async (req: Request) => {
           bundledProfanitySignal,
           lexicon,
           moderation,
+          modernSlangSignal,
         },
       );
 
@@ -596,6 +753,7 @@ Deno.serve(async (req: Request) => {
         bundledProfanitySignal,
         lexicon,
         moderation,
+        modernSlangSignal,
       },
     );
 
@@ -706,6 +864,7 @@ async function resolveBlockingDecision(
     bundledProfanitySignal: BundledProfanitySignal;
     lexicon: LexiconDecision;
     moderation: ModerationDecision;
+    modernSlangSignal: ModernSlangSignal;
   },
 ): Promise<boolean> {
   if (input.lexicalBlocked) {
@@ -751,6 +910,43 @@ async function resolveBlockingDecision(
   }
 
   // -------------------------------------------------------------------------
+  // V2.4.6.2 — MOTEUR CONTEXTUEL SERVEUR
+  //
+  // Même logique que celle validée dans l'application :
+  // slang moderne, mots complets, accords/conjugaisons et faux positifs.
+  // -------------------------------------------------------------------------
+
+  if (
+    input.modernSlangSignal.blocked
+  ) {
+    await logModerationEvent(
+      adminClient,
+      {
+        userId:
+          input.userId,
+        surface:
+          input.surface,
+        decision:
+          'blocked',
+        categories: [
+          input.modernSlangSignal.category,
+        ],
+        content:
+          input.content,
+      },
+    );
+
+    return true;
+  }
+
+  // Si V2.4.6.2 reconnaît une famille contextuelle mais choisit de l'autoriser,
+  // l'ancien heuristique ne doit pas repasser derrière et la rebloquer.
+  const modernContextHandled =
+    isModernContextSensitiveContent(
+      input.content,
+    );
+
+  // -------------------------------------------------------------------------
   // V2.4.1 — VULGARITÉ VS INSULTE DIRIGÉE
   //
   // Un gros mot seul n'est pas automatiquement une violation.
@@ -763,8 +959,15 @@ async function resolveBlockingDecision(
   // directement : l'intention est explicitement de contourner le filtre.
   // -------------------------------------------------------------------------
 
+  const explanatoryModernUse =
+    modernContextHandled &&
+    isModernExplicitExplanatoryUse(
+      input.content,
+    );
+
   if (
-    input.bundledProfanitySignal.obfuscated
+    input.bundledProfanitySignal.obfuscated &&
+    !explanatoryModernUse
   ) {
     await logModerationEvent(
       adminClient,
@@ -793,6 +996,7 @@ async function resolveBlockingDecision(
 
   const directedAbuse =
     profanitySignal &&
+    !modernContextHandled &&
     looksLikeDirectedAbuse(
       input.content,
       [
@@ -1421,6 +1625,989 @@ function looksLikeDirectedAbuse(
   }
 
   return targeted;
+}
+
+// ============================================================================
+// V2.4.6 - SLANG MODERNE / CONTOURNEMENTS
+// ============================================================================
+
+function scanModernSlangV246(
+  content: string,
+): ModernSlangSignal {
+  const raw =
+    String(
+      content ?? '',
+    );
+
+  if (
+    raw.trim().length === 0
+  ) {
+    return allowedModernSlang();
+  }
+
+  const hasMention =
+    /(^|\s)@[a-z0-9_]{2,}/iu
+      .test(
+        raw,
+      );
+
+  const variants =
+    buildModernVariants(
+      raw,
+    );
+
+  for (
+    const normalized
+    of variants
+  ) {
+    if (
+      normalized.length === 0
+    ) {
+      continue;
+    }
+
+    const directlyTargeted =
+      hasMention ||
+      looksModernDirectlyTargeted(
+        normalized,
+      );
+
+    if (
+      containsAnyModernPhrase(
+        normalized,
+        SELF_HARM_DIRECTIVES,
+      )
+    ) {
+      return blockedModernSlang(
+        'self_harm_directive',
+      );
+    }
+
+    if (
+      containsModernAbbreviation(
+        normalized,
+        'kys',
+      ) &&
+      (
+        directlyTargeted ||
+        isShortModernAttack(
+          normalized,
+        )
+      )
+    ) {
+      return blockedModernSlang(
+        'self_harm_directive',
+      );
+    }
+
+    const insultingFrame =
+      looksModernInsultFrame(
+        normalized,
+      );
+
+    const humanTargetFrame =
+      looksModernHumanTargetFrame(
+        normalized,
+      );
+
+    const quotedOrExplained =
+      looksModernQuotedOrExplanatoryUse(
+        normalized,
+      );
+
+    const intensified =
+      containsAnyModernPhrase(
+        normalized,
+        INTENSIFIERS,
+      );
+
+    if (
+      (
+        containsStrongModernFullWordInsult(
+          normalized,
+        ) ||
+        containsContextualModernFullPhraseInsult(
+          normalized,
+        )
+      ) &&
+      !quotedOrExplained &&
+      (
+        directlyTargeted ||
+        insultingFrame ||
+        humanTargetFrame ||
+        intensified ||
+        isStandaloneModernContextualFullPhrase(
+          normalized,
+        ) ||
+        isShortModernAttack(
+          normalized,
+        )
+      )
+    ) {
+      return blockedModernSlang(
+        'modern_slang_directed',
+      );
+    }
+
+    if (
+      containsContextualModernFullWordInsult(
+        normalized,
+      ) &&
+      !quotedOrExplained &&
+      (
+        directlyTargeted ||
+        insultingFrame ||
+        humanTargetFrame ||
+        intensified ||
+        isShortModernAttack(
+          normalized,
+        )
+      )
+    ) {
+      return blockedModernSlang(
+        'modern_slang_directed',
+      );
+    }
+
+    if (
+      containsFrenchModernInsultGrammar(
+        normalized,
+        {
+          directlyTargeted,
+          insultingFrame,
+          humanTargetFrame,
+          quotedOrExplained,
+        },
+      )
+    ) {
+      return blockedModernSlang(
+        'modern_slang_directed',
+      );
+    }
+
+    for (
+      const abbreviation
+      of STRONG_ABBREVIATIONS
+    ) {
+      if (
+        !containsModernAbbreviation(
+          normalized,
+          abbreviation,
+        )
+      ) {
+        continue;
+      }
+
+      if (
+        directlyTargeted ||
+        insultingFrame ||
+        intensified ||
+        isShortModernAttack(
+          normalized,
+        )
+      ) {
+        return blockedModernSlang(
+          variants.length > 1
+            ? 'modern_slang_obfuscated'
+            : 'modern_slang_directed',
+        );
+      }
+    }
+
+    const hasDirectedSlang =
+      containsModernDirectedTerm(
+        normalized,
+      );
+
+    if (
+      hasDirectedSlang &&
+      (
+        directlyTargeted ||
+        insultingFrame ||
+        intensified
+      )
+    ) {
+      return blockedModernSlang(
+        'modern_slang_directed',
+      );
+    }
+
+    const hasMildMockery =
+      containsAnyModernPhrase(
+        normalized,
+        MODERN_MILD_MOCKERY,
+      );
+
+    if (
+      hasMildMockery &&
+      insultingFrame &&
+      (
+        directlyTargeted ||
+        intensified
+      )
+    ) {
+      return blockedModernSlang(
+        'modern_slang_directed',
+      );
+    }
+  }
+
+  return allowedModernSlang();
+}
+
+function blockedModernSlang(
+  category:
+    ModernSlangSignal['category'],
+): ModernSlangSignal {
+  return {
+    blocked: true,
+    category,
+  };
+}
+
+function allowedModernSlang():
+  ModernSlangSignal {
+  return {
+    blocked: false,
+    category: 'none',
+  };
+}
+
+function buildModernVariants(
+  input: string,
+): string[] {
+  const result =
+    new Set<string>();
+
+  const normalized =
+    normalizeModern(
+      input,
+    );
+
+  if (
+    normalized.length === 0
+  ) {
+    return [];
+  }
+
+  result.add(
+    normalized,
+  );
+
+  const repeatTwo =
+    collapseModernRepeatsToTwo(
+      normalized,
+    );
+
+  result.add(
+    repeatTwo,
+  );
+
+  const repeatOne =
+    collapseModernRepeatsToOne(
+      normalized,
+    );
+
+  result.add(
+    repeatOne,
+  );
+
+  result.add(
+    collapseModernSeparatedLetters(
+      repeatTwo,
+    ),
+  );
+
+  result.add(
+    collapseModernSeparatedLetters(
+      repeatOne,
+    ),
+  );
+
+  return [
+    ...result,
+  ].filter(
+    (value) =>
+      value.trim().length > 0,
+  );
+}
+
+function normalizeModern(
+  input: string,
+): string {
+  let value =
+    input
+      .normalize(
+        'NFKC',
+      )
+      .toLowerCase()
+      .normalize(
+        'NFKD',
+      )
+      .replace(
+        /[\u0300-\u036f]/gu,
+        '',
+      );
+
+  value =
+    Array.from(
+      value,
+    )
+      .map(
+        (character) =>
+          CONFUSABLES[
+            character
+          ] ??
+          character,
+      )
+      .join('');
+
+  return value
+    .replace(/0/g, 'o')
+    .replace(/1/g, 'i')
+    .replace(/3/g, 'e')
+    .replace(/4/g, 'a')
+    .replace(/5/g, 's')
+    .replace(/7/g, 't')
+    .replace(/@/g, 'a')
+    .replace(/\$/g, 's')
+    .replace(/€/g, 'e')
+    .replace(
+      /[^a-z0-9]+/gu,
+      ' ',
+    )
+    .replace(
+      /\s+/gu,
+      ' ',
+    )
+    .trim();
+}
+
+function collapseModernRepeatsToTwo(
+  input: string,
+): string {
+  return input.replace(
+    /([a-z])\1{2,}/gu,
+    '$1$1',
+  );
+}
+
+function collapseModernRepeatsToOne(
+  input: string,
+): string {
+  return input.replace(
+    /([a-z])\1+/gu,
+    '$1',
+  );
+}
+
+function collapseModernSeparatedLetters(
+  input: string,
+): string {
+  const tokens =
+    input
+      .split(
+        /\s+/gu,
+      )
+      .filter(
+        Boolean,
+      );
+
+  if (tokens.length < 3) {
+    return input;
+  }
+
+  const output:
+    string[] = [];
+
+  let index = 0;
+
+  while (
+    index < tokens.length
+  ) {
+    if (
+      !/^[a-z]$/u.test(
+        tokens[index],
+      )
+    ) {
+      output.push(
+        tokens[index],
+      );
+
+      index += 1;
+      continue;
+    }
+
+    let cursor =
+      index;
+
+    while (
+      cursor <
+        tokens.length &&
+      /^[a-z]$/u.test(
+        tokens[cursor],
+      )
+    ) {
+      cursor += 1;
+    }
+
+    const runLength =
+      cursor - index;
+
+    if (runLength >= 3) {
+      output.push(
+        tokens
+          .slice(
+            index,
+            cursor,
+          )
+          .join(''),
+      );
+    } else {
+      output.push(
+        ...tokens.slice(
+          index,
+          cursor,
+        ),
+      );
+    }
+
+    index =
+      cursor;
+  }
+
+  return output.join(
+    ' ',
+  );
+}
+
+function containsAnyModernPhrase(
+  normalized: string,
+  phrases: Set<string>,
+): boolean {
+  for (
+    const phrase
+    of phrases
+  ) {
+    if (
+      containsWholeModernPhrase(
+        normalized,
+        phrase,
+      )
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function containsWholeModernPhrase(
+  normalized: string,
+  phrase: string,
+): boolean {
+  const cleanPhrase =
+    normalizeModern(
+      phrase,
+    );
+
+  if (
+    cleanPhrase.length === 0
+  ) {
+    return false;
+  }
+
+  return (
+    ` ${normalized} `
+  ).includes(
+    ` ${cleanPhrase} `,
+  );
+}
+
+function containsModernAbbreviation(
+  normalized: string,
+  abbreviation: string,
+): boolean {
+  if (
+    containsWholeModernPhrase(
+      normalized,
+      abbreviation,
+    )
+  ) {
+    return true;
+  }
+
+  const letters =
+    Array.from(
+      abbreviation,
+    )
+      .map(
+        escapeRegExp,
+      )
+      .join(
+        '\\s+',
+      );
+
+  return new RegExp(
+    `(?:^|\\s)${letters}(?:\\s|$)`,
+    'u',
+  ).test(
+    normalized,
+  );
+}
+
+function escapeRegExp(
+  value: string,
+): string {
+  return value.replace(
+    /[.*+?^${}()|[\]\\]/gu,
+    '\\$&',
+  );
+}
+
+function containsStrongModernFullWordInsult(
+  normalized: string,
+): boolean {
+  if (
+    containsAnyModernPhrase(
+      normalized,
+      STRONG_FULL_WORD_INSULTS,
+    )
+  ) {
+    return true;
+  }
+
+  const patterns: RegExp[] = [
+    /\bconn(?:ard|ards|asse|asses)\b/u,
+    /\bsalopes?\b/u,
+    /\bputes?\b/u,
+    /\benfoire(?:s|e|es)?\b/u,
+    /\bbatard(?:s|e|es)?\b/u,
+    /\btocard(?:s|e|es)?\b/u,
+    /\bcrevard(?:s|e|es)?\b/u,
+    /\bordures?\b/u,
+    /\bmerdeu(?:x|se|ses)\b/u,
+    /\bencul(?:e|es|ee|ees)\b/u,
+  ];
+
+  return patterns.some(
+    (pattern) =>
+      pattern.test(
+        normalized,
+      ),
+  );
+}
+
+function containsContextualModernFullWordInsult(
+  normalized: string,
+): boolean {
+  if (
+    containsAnyModernPhrase(
+      normalized,
+      CONTEXTUAL_FULL_WORD_INSULTS,
+    )
+  ) {
+    return true;
+  }
+
+  const patterns: RegExp[] = [
+    /\bcon(?:s|ne|nes)?\b/u,
+    /\bdebiles?\b/u,
+    /\bidiot(?:s|e|es)?\b/u,
+    /\bcretin(?:s|e|es)?\b/u,
+    /\babruti(?:s|e|es)?\b/u,
+    /\bminables?\b/u,
+  ];
+
+  return patterns.some(
+    (pattern) =>
+      pattern.test(
+        normalized,
+      ),
+  );
+}
+
+function containsContextualModernFullPhraseInsult(
+  normalized: string,
+): boolean {
+  if (
+    containsAnyModernPhrase(
+      normalized,
+      CONTEXTUAL_FULL_PHRASE_INSULTS,
+    )
+  ) {
+    return true;
+  }
+
+  const patterns: RegExp[] = [
+    /\bfils de putes?\b/u,
+    /\bfilles? de putes?\b/u,
+    /\btrous? du cul\b/u,
+    /\bsacs? a merde\b/u,
+    /\bsous merdes?\b/u,
+  ];
+
+  return patterns.some(
+    (pattern) =>
+      pattern.test(
+        normalized,
+      ),
+  );
+}
+
+function isStandaloneModernContextualFullPhrase(
+  normalized: string,
+): boolean {
+  const value =
+    normalized.trim();
+
+  const patterns: RegExp[] = [
+    /^fils de putes?$/u,
+    /^filles? de putes?$/u,
+    /^trous? du cul$/u,
+    /^sacs? a merde$/u,
+    /^sous merdes?$/u,
+  ];
+
+  return patterns.some(
+    (pattern) =>
+      pattern.test(
+        value,
+      ),
+  );
+}
+
+function containsFrenchModernInsultGrammar(
+  normalized: string,
+  context: {
+    directlyTargeted: boolean;
+    insultingFrame: boolean;
+    humanTargetFrame: boolean;
+    quotedOrExplained: boolean;
+  },
+): boolean {
+  if (
+    context.quotedOrExplained
+  ) {
+    return false;
+  }
+
+  const alwaysAbusivePatterns:
+    RegExp[] = [
+      /\bniqu(?:e|es|ez|ons|er|erai|eras|era|erons|erez|eront|erais|erait|erions|eriez|eraient|ais|ait|ions|iez|aient) (?:ta|ton|tes|votre|vos) (?:mere|meres|famille|darone|daronne)\b/u,
+      /\bferm(?:e|es|ez|ons|er|erai|eras|era|erons|erez|eront|erais|erait|erions|eriez|eraient|ais|ait|ions|iez|aient) (?:ta|ton|tes|votre|vos) gueules?\b/u,
+      /\b(?:ta|ton|tes|votre|vos) gueules?\b/u,
+      /\b(?:va|vas|allez|aller|irai|iras|irez|iront) (?:te|vous) faire foutre\b/u,
+      /\b(?:va|vas|allez|aller|irai|iras|irez|iront) (?:te|vous) faire (?:enculer|niquer)\b/u,
+      /\b(?:fuck you|fuck u)\b/u,
+      /\b(?:t|te|vous) niqu(?:e|es|ez|ons|er|erai|eras|era|erons|erez|eront|erais|erait|erions|eriez|eraient|ais|ait|ions|iez|aient)\b/u,
+      /\b(?:t|te|vous) encul(?:e|es|ez|ons|er|erai|eras|era|erons|erez|eront|erais|erait|erions|eriez|eraient|ais|ait|ions|iez|aient)\b/u,
+      /\b(?:sale|gros|grosse|pauvre|espece de) (?:con|conne|connard|connasse|debile|idiot|idiote|cretin|cretine|abruti|abrutie|salope|pute|batard|batarde|tocard|tocarde|clown|bot|pnj|npc)s?\b/u,
+      /\b(?:grosse?|sale) merde\b/u,
+    ];
+
+  if (
+    alwaysAbusivePatterns.some(
+      (pattern) =>
+        pattern.test(
+          normalized,
+        ),
+    )
+  ) {
+    return true;
+  }
+
+  if (
+    containsContextualModernFullPhraseInsult(
+      normalized,
+    ) &&
+    (
+      context.directlyTargeted ||
+      context.insultingFrame ||
+      context.humanTargetFrame ||
+      isStandaloneModernContextualFullPhrase(
+        normalized,
+      ) ||
+      isShortModernAttack(
+        normalized,
+      )
+    )
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function containsModernDirectedTerm(
+  normalized: string,
+): boolean {
+  for (
+    const term
+    of MODERN_DIRECTED_TERMS
+  ) {
+    const clean =
+      normalizeModern(
+        term,
+      );
+
+    if (
+      clean.length === 0
+    ) {
+      continue;
+    }
+
+    if (
+      clean.includes(
+        ' ',
+      )
+    ) {
+      if (
+        containsWholeModernPhrase(
+          normalized,
+          clean,
+        )
+      ) {
+        return true;
+      }
+
+      continue;
+    }
+
+    const pattern =
+      new RegExp(
+        `(?:^|\\s)${escapeRegExp(clean)}(?:s|es)?(?:\\s|$)`,
+        'u',
+      );
+
+    if (
+      pattern.test(
+        normalized,
+      )
+    ) {
+      return true;
+    }
+  }
+
+  const extraPatterns:
+    RegExp[] = [
+      /\bbouffon(?:s|ne|nes)?\b/u,
+      /\bclowns?\b/u,
+      /\bgolmons?\b/u,
+      /\bgolems?\b/u,
+      /\bmatrixe(?:s)?\b/u,
+      /\bfraudes?\b/u,
+    ];
+
+  return extraPatterns.some(
+    (pattern) =>
+      pattern.test(
+        normalized,
+      ),
+  );
+}
+
+function looksModernQuotedOrExplanatoryUse(
+  normalized: string,
+): boolean {
+  const patterns: RegExp[] = [
+    /\bc est quoi\b/u,
+    /\bca veut dire quoi\b/u,
+    /\bque veut dire\b/u,
+    /\bqu est ce que veut dire\b/u,
+    /\ble mot\b/u,
+    /\bl expression\b/u,
+    /\bla definition\b/u,
+    /\bdefinition de\b/u,
+    /\bcomment on ecrit\b/u,
+    /\bcomment ecrire\b/u,
+    /\bcomment ca s ecrit\b/u,
+    /\bexemple de\b/u,
+    /\bcitation\b/u,
+  ];
+
+  return patterns.some(
+    (pattern) =>
+      pattern.test(
+        normalized,
+      ),
+  );
+}
+
+function looksModernHumanTargetFrame(
+  normalized: string,
+): boolean {
+  const patterns: RegExp[] = [
+    /\bil (?:est|etait|sera|serait)(?: vraiment)?(?: un)?\b/u,
+    /\belle (?:est|etait|sera|serait)(?: vraiment)?(?: une)?\b/u,
+    /\bils (?:sont|etaient|seront|seraient)(?: vraiment)?(?: des)?\b/u,
+    /\belles (?:sont|etaient|seront|seraient)(?: vraiment)?(?: des)?\b/u,
+    /\bce (?:mec|gars|type|joueur|joueuse) (?:est|etait|sera|serait)\b/u,
+    /\bcette (?:meuf|fille|joueuse) (?:est|etait|sera|serait)\b/u,
+    /\bquel(?:le)? (?:con|conne|connard|connasse|debile|idiot|idiote|cretin|cretine|abruti|abrutie|salope|pute|batard|batarde|tocard|tocarde)\b/u,
+  ];
+
+  return patterns.some(
+    (pattern) =>
+      pattern.test(
+        normalized,
+      ),
+  );
+}
+
+function looksModernDirectlyTargeted(
+  normalized: string,
+): boolean {
+  const patterns:
+    RegExp[] = [
+      /\btu\b/u,
+      /\btoi\b/u,
+      /\bvous\b/u,
+      /\bt es\b/u,
+      /\bton\b/u,
+      /\bta\b/u,
+      /\btes\b/u,
+      /\byou\b/u,
+      /\byou are\b/u,
+      /\byoure\b/u,
+      /\byour\b/u,
+      /\bu r\b/u,
+    ];
+
+  return patterns.some(
+    (pattern) =>
+      pattern.test(
+        normalized,
+      ),
+  );
+}
+
+function looksModernInsultFrame(
+  normalized: string,
+): boolean {
+  const patterns:
+    RegExp[] = [
+      /\bt es(?: vraiment)?(?: un| une)?\b/u,
+      /\btu es(?: vraiment)?(?: un| une)?\b/u,
+      /\btoi t es\b/u,
+      /\bvous etes(?: un| une)?\b/u,
+      /\byou are(?: a| an)?\b/u,
+      /\byoure(?: a| an)?\b/u,
+      /\bu r(?: a| an)?\b/u,
+      /\bferm(?:e|es|ez|ons|er|erai|eras|era|erons|erez|eront|erais|erait|erions|eriez|eraient|ais|ait|ions|iez|aient) (?:ta|ton|tes|votre|vos) gueules?\b/u,
+      /\bferme la\b/u,
+      /\b(?:degage|degagez)\b/u,
+    ];
+
+  return patterns.some(
+    (pattern) =>
+      pattern.test(
+        normalized,
+      ),
+  );
+}
+
+function isShortModernAttack(
+  normalized: string,
+): boolean {
+  return normalized
+    .split(
+      /\s+/gu,
+    )
+    .filter(
+      Boolean,
+    )
+    .length <= 2;
+}
+
+
+// Reconnaît les familles évaluées par le moteur V2.4.6.2, même lorsque
+// la décision finale est "autorisé". Cela évite que l'ancien filtre brut
+// écrase ensuite une décision contextuelle déjà prise.
+function isModernContextSensitiveContent(
+  content: string,
+): boolean {
+  const variants =
+    buildModernVariants(
+      content,
+    );
+
+  for (
+    const normalized
+    of variants
+  ) {
+    if (
+      normalized.length === 0
+    ) {
+      continue;
+    }
+
+    if (
+      containsStrongModernFullWordInsult(
+        normalized,
+      ) ||
+      containsContextualModernFullWordInsult(
+        normalized,
+      ) ||
+      containsContextualModernFullPhraseInsult(
+        normalized,
+      ) ||
+      containsModernDirectedTerm(
+        normalized,
+      ) ||
+      containsAnyModernPhrase(
+        normalized,
+        MODERN_MILD_MOCKERY,
+      )
+    ) {
+      return true;
+    }
+
+    for (
+      const abbreviation
+      of STRONG_ABBREVIATIONS
+    ) {
+      if (
+        containsModernAbbreviation(
+          normalized,
+          abbreviation,
+        )
+      ) {
+        return true;
+      }
+    }
+
+    if (
+      containsModernAbbreviation(
+        normalized,
+        'kys',
+      ) ||
+      /\b(?:niqu|encul)[a-z]{0,16}\b/u
+        .test(
+          normalized,
+        )
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function isModernExplicitExplanatoryUse(
+  content: string,
+): boolean {
+  const normalized =
+    normalizeModern(
+      content,
+    );
+
+  return (
+    normalized.length > 0 &&
+    looksModernQuotedOrExplanatoryUse(
+      normalized,
+    )
+  );
 }
 
 function detectProjectLanguages(
