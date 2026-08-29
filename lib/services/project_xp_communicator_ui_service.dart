@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 
 final GlobalKey<NavigatorState> projectXpNavigatorKey =
     GlobalKey<NavigatorState>();
@@ -17,6 +18,15 @@ class ProjectXpCommunicatorUiService {
 
   static final ValueNotifier<int> alertVisibilityRevision =
       ValueNotifier<int>(0);
+
+  // V2.4.7 — évite de notifier GlobalCommunicatorAlert pendant
+  // qu'un arbre de widgets est en cours de construction.
+  //
+  // Les tokens sont, eux, modifiés immédiatement : la source de vérité reste
+  // donc toujours correcte. Seule la notification visuelle est éventuellement
+  // repoussée à la fin de la frame courante.
+  static bool _alertVisibilityNotificationScheduled =
+      false;
 
   static bool _navigationReady = false;
 
@@ -47,7 +57,7 @@ class ProjectXpCommunicatorUiService {
     );
 
     if (changed) {
-      alertVisibilityRevision.value++;
+      _notifyAlertVisibilityChangedSafely();
     }
   }
 
@@ -60,7 +70,7 @@ class ProjectXpCommunicatorUiService {
     );
 
     if (changed) {
-      alertVisibilityRevision.value++;
+      _notifyAlertVisibilityChangedSafely();
     }
   }
 
@@ -70,11 +80,57 @@ class ProjectXpCommunicatorUiService {
     }
 
     _navigationReady = true;
-    alertVisibilityRevision.value++;
+    _notifyAlertVisibilityChangedSafely();
 
     if (!_navigationReadyCompleter.isCompleted) {
       _navigationReadyCompleter.complete();
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // IMPORTANT :
+  //
+  // RouteObserver.subscribe() peut appeler didPush() immédiatement depuis
+  // didChangeDependencies(), donc pendant le build du Hall.
+  //
+  // Avant ce correctif, suppressGlobalCommunicatorAlert() modifiait le
+  // ValueNotifier sur-le-champ. GlobalCommunicatorAlert recevait alors la
+  // notification et appelait setState() pendant que Flutter était encore en
+  // train de construire l'arbre, provoquant :
+  //
+  //   setState() or markNeedsBuild() called during build
+  //
+  // On notifie immédiatement uniquement lorsque Flutter est dans une phase
+  // sûre. Sinon, on regroupe les changements et on notifie après la frame.
+  // ---------------------------------------------------------------------------
+  static void _notifyAlertVisibilityChangedSafely() {
+    final SchedulerBinding binding =
+        SchedulerBinding.instance;
+
+    final SchedulerPhase phase =
+        binding.schedulerPhase;
+
+    final bool canNotifyImmediately =
+        phase == SchedulerPhase.idle ||
+        phase == SchedulerPhase.postFrameCallbacks;
+
+    if (canNotifyImmediately) {
+      alertVisibilityRevision.value++;
+      return;
+    }
+
+    if (_alertVisibilityNotificationScheduled) {
+      return;
+    }
+
+    _alertVisibilityNotificationScheduled = true;
+
+    binding.addPostFrameCallback(
+      (_) {
+        _alertVisibilityNotificationScheduled = false;
+        alertVisibilityRevision.value++;
+      },
+    );
   }
 
   static Future<bool> waitUntilNavigationReady({
@@ -102,7 +158,6 @@ class ProjectXpCommunicatorUiService {
       await _navigationReadyCompleter.future.timeout(
         timeout,
       );
-
       return true;
     } on TimeoutException {
       return false;
