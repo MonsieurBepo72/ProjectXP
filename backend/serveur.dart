@@ -1,11 +1,15 @@
 // ignore_for_file: avoid_print
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
 const int _serverPort = 8080;
 const int _maxRequestBytes = 12 * 1024 * 1024;
+const int _maxDecodedImageBytes = 8 * 1024 * 1024;
+const Duration _openAiConnectionTimeout = Duration(seconds: 20);
+const Duration _openAiResponseTimeout = Duration(minutes: 3);
 
 const String _allowLanEnvironmentKey =
     'PROJECT_XP_DEV_SERVER_ALLOW_LAN';
@@ -106,13 +110,55 @@ bool _hasValidDevToken(
       (request.headers.value('x-project-xp-dev-token') ?? '').trim();
 
   return providedToken.isNotEmpty &&
-      providedToken == expectedToken;
+      _constantTimeEquals(
+        providedToken,
+        expectedToken,
+      );
+}
+
+bool _constantTimeEquals(
+  String left,
+  String right,
+) {
+  final List<int> leftBytes =
+      utf8.encode(left);
+
+  final List<int> rightBytes =
+      utf8.encode(right);
+
+  final int maxLength =
+      leftBytes.length > rightBytes.length
+          ? leftBytes.length
+          : rightBytes.length;
+
+  int difference =
+      leftBytes.length ^ rightBytes.length;
+
+  for (int index = 0;
+      index < maxLength;
+      index++) {
+    final int leftByte =
+        index < leftBytes.length
+            ? leftBytes[index]
+            : 0;
+
+    final int rightByte =
+        index < rightBytes.length
+            ? rightBytes[index]
+            : 0;
+
+    difference |= leftByte ^ rightByte;
+  }
+
+  return difference == 0;
 }
 
 Future<void> _generateAvatar(
   HttpRequest request,
   String apiKey,
 ) async {
+  HttpClient? openAiClient;
+
   try {
     if (request.contentLength > _maxRequestBytes) {
       await _sendError(
@@ -141,11 +187,34 @@ Future<void> _generateAvatar(
       requestBytes.add(chunk);
     }
 
-    final String body = utf8.decode(
-      requestBytes.takeBytes(),
-    );
+    late final String body;
 
-    final dynamic decodedInput = jsonDecode(body);
+    try {
+      body = utf8.decode(
+        requestBytes.takeBytes(),
+      );
+    } on FormatException {
+      await _sendError(
+        request,
+        HttpStatus.badRequest,
+        'Encodage de requête invalide.',
+      );
+      return;
+    }
+
+    late final dynamic decodedInput;
+
+    try {
+      decodedInput =
+          jsonDecode(body);
+    } on FormatException {
+      await _sendError(
+        request,
+        HttpStatus.badRequest,
+        'JSON invalide.',
+      );
+      return;
+    }
 
     if (decodedInput is! Map<String, dynamic>) {
       await _sendError(
@@ -158,28 +227,104 @@ Future<void> _generateAvatar(
 
     final Map<String, dynamic> input = decodedInput;
 
-    final String? imageBase64 =
-        input['imageBase64'] as String?;
+    final dynamic rawImageBase64 =
+        input['imageBase64'];
 
-    final String mimeType =
-        input['mimeType'] as String? ??
-            'image/jpeg';
+    final dynamic rawMimeType =
+        input['mimeType'];
 
-    if (imageBase64 == null ||
-        imageBase64.isEmpty) {
+    if (rawImageBase64 is! String ||
+        rawImageBase64.trim().isEmpty) {
       await _sendError(
         request,
         HttpStatus.badRequest,
-        'Aucune photo reçue.',
+        'Aucune photo valide reçue.',
       );
-
       return;
     }
 
-    print('Photo reçue.');
+    if (rawMimeType != null &&
+        rawMimeType is! String) {
+      await _sendError(
+        request,
+        HttpStatus.badRequest,
+        'Type MIME invalide.',
+      );
+      return;
+    }
+
+    final String mimeType =
+        (rawMimeType as String? ?? 'image/jpeg')
+            .trim()
+            .toLowerCase();
+
+    const Set<String> allowedMimeTypes =
+        <String>{
+      'image/jpeg',
+      'image/png',
+      'image/webp',
+    };
+
+    if (!allowedMimeTypes.contains(mimeType)) {
+      await _sendError(
+        request,
+        HttpStatus.unsupportedMediaType,
+        'Format image non supporté.',
+      );
+      return;
+    }
+
+    final String imageBase64 =
+        rawImageBase64.trim();
+
+    late final List<int> decodedImage;
+
+    try {
+      decodedImage =
+          base64Decode(imageBase64);
+    } on FormatException {
+      await _sendError(
+        request,
+        HttpStatus.badRequest,
+        'Image base64 invalide.',
+      );
+      return;
+    }
+
+    if (decodedImage.isEmpty ||
+        decodedImage.length >
+            _maxDecodedImageBytes) {
+      await _sendError(
+        request,
+        HttpStatus.requestEntityTooLarge,
+        'Image vide ou trop volumineuse.',
+      );
+      return;
+    }
+
+    if (!_matchesImageSignature(
+      decodedImage,
+      mimeType,
+    )) {
+      await _sendError(
+        request,
+        HttpStatus.badRequest,
+        'Le contenu de l’image ne correspond pas au type annoncé.',
+      );
+      return;
+    }
+
+    print('Photo validée.');
     print('Génération de l’avatar...');
 
-    final HttpClient client = HttpClient();
+    final HttpClient client =
+        HttpClient()
+          ..connectionTimeout =
+              _openAiConnectionTimeout
+          ..idleTimeout =
+              const Duration(seconds: 30);
+
+    openAiClient = client;
 
     final HttpClientRequest openAiRequest =
         await client.postUrl(
@@ -257,19 +402,26 @@ IMPORTANT:
     );
 
     final HttpClientResponse openAiResponse =
-        await openAiRequest.close();
+        await openAiRequest
+            .close()
+            .timeout(
+              _openAiResponseTimeout,
+            );
 
     final String openAiBody =
         await utf8.decoder
             .bind(openAiResponse)
+            .timeout(
+              _openAiResponseTimeout,
+            )
             .join();
-
-    client.close();
 
     if (openAiResponse.statusCode < 200 ||
         openAiResponse.statusCode >= 300) {
-      print('Erreur OpenAI :');
-      print(openAiBody);
+      print(
+        'OpenAI a refusé la génération '
+        '(HTTP ${openAiResponse.statusCode}).',
+      );
 
       await _sendError(
         request,
@@ -280,11 +432,27 @@ IMPORTANT:
       return;
     }
 
-    final Map<String, dynamic> responseJson =
+    final dynamic decodedResponse =
         jsonDecode(openAiBody);
 
+    if (decodedResponse
+            is! Map<String, dynamic> ||
+        decodedResponse['output']
+            is! List<dynamic>) {
+      await _sendError(
+        request,
+        HttpStatus.badGateway,
+        'Réponse de génération invalide.',
+      );
+      return;
+    }
+
+    final Map<String, dynamic> responseJson =
+        decodedResponse;
+
     final List<dynamic> output =
-        responseJson['output'] as List<dynamic>;
+        responseJson['output']
+            as List<dynamic>;
 
     String? generatedImage;
 
@@ -292,10 +460,13 @@ IMPORTANT:
       if (item is Map<String, dynamic> &&
           item['type'] ==
               'image_generation_call') {
-        generatedImage =
-            item['result'] as String?;
+        final dynamic rawResult =
+            item['result'];
 
-        if (generatedImage != null) {
+        if (rawResult is String &&
+            rawResult.isNotEmpty) {
+          generatedImage =
+              rawResult;
           break;
         }
       }
@@ -323,15 +494,104 @@ IMPORTANT:
       );
 
     await request.response.close();
-  } catch (error, stackTrace) {
-    print(error);
-    print(stackTrace);
+  } on TimeoutException {
+    print(
+      'Timeout pendant la génération d’avatar.',
+    );
 
-    await _sendError(
+    await _trySendError(
+      request,
+      HttpStatus.gatewayTimeout,
+      'La génération a expiré.',
+    );
+  } catch (error) {
+    print(
+      'Erreur avatar : ${error.runtimeType}.',
+    );
+
+    await _trySendError(
       request,
       HttpStatus.internalServerError,
       'Erreur interne du serveur.',
     );
+  } finally {
+    openAiClient?.close(
+      force: true,
+    );
+  }
+}
+
+bool _matchesImageSignature(
+  List<int> bytes,
+  String mimeType,
+) {
+  bool startsWith(
+    List<int> signature,
+  ) {
+    if (bytes.length < signature.length) {
+      return false;
+    }
+
+    for (int index = 0;
+        index < signature.length;
+        index++) {
+      if (bytes[index] != signature[index]) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  switch (mimeType) {
+    case 'image/jpeg':
+      return startsWith(
+        <int>[0xff, 0xd8, 0xff],
+      );
+
+    case 'image/png':
+      return startsWith(
+        <int>[
+          0x89,
+          0x50,
+          0x4e,
+          0x47,
+          0x0d,
+          0x0a,
+          0x1a,
+          0x0a,
+        ],
+      );
+
+    case 'image/webp':
+      return bytes.length >= 12 &&
+          String.fromCharCodes(
+                bytes.sublist(0, 4),
+              ) ==
+              'RIFF' &&
+          String.fromCharCodes(
+                bytes.sublist(8, 12),
+              ) ==
+              'WEBP';
+
+    default:
+      return false;
+  }
+}
+
+Future<void> _trySendError(
+  HttpRequest request,
+  int statusCode,
+  String message,
+) async {
+  try {
+    await _sendError(
+      request,
+      statusCode,
+      message,
+    );
+  } catch (_) {
+    // La réponse peut déjà avoir été fermée après une coupure réseau.
   }
 }
 

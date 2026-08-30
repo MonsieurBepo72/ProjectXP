@@ -46,3 +46,17 @@ Avant une bêta publique :
 ## Signalement
 
 En cas de découverte d'une vulnérabilité ou d'un secret exposé, ne pas publier le secret dans une issue publique. Prévenir le propriétaire du dépôt par un canal privé et révoquer/faire tourner le secret concerné.
+
+
+## Administration de la Taverne
+
+La suppression individuelle et la réinitialisation des messages de la Taverne
+doivent passer par des fonctions PostgreSQL `SECURITY DEFINER` qui vérifient
+`auth.uid()` dans `public.project_admins`.
+
+La présence d'un bouton admin dans Flutter ne constitue jamais une autorisation.
+
+## Notifications
+
+Les tokens FCM identifient une installation et ne doivent jamais être écrits
+en clair dans les logs, rapports de crash ou outils d'observabilité.

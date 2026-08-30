@@ -1,14 +1,18 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../models/avatar_model.dart';
 import '../services/content_moderation_service.dart';
 import '../services/friend_service.dart';
 import '../services/online_presence_service.dart';
+import '../services/profile_storage.dart';
 import '../services/project_xp_admin_service.dart';
 import '../services/project_xp_message_send_result.dart';
 import '../services/supabase_service.dart';
+import '../services/tavern_profile_service.dart';
 import '../services/tavern_service.dart';
 import '../widgets/avatar_renderer.dart';
 
@@ -24,7 +28,7 @@ class TavernScreen extends StatefulWidget {
 class _TavernScreenState extends State<TavernScreen> {
 
   // ===========================================================================
-  // TAVERNE V8.1 — POLISH VISUEL + UI DYNAMIQUE
+  // TAVERNE V8.1.6 — HEADER ÉQUILIBRÉ + COMPOSER
   // ===========================================================================
   //
   // Le décor lourd est maintenant porté par des images dédiées : header,
@@ -71,6 +75,18 @@ class _TavernScreenState extends State<TavernScreen> {
       Color(0xff9e642b);
 
   static const double _maxTavernWidth = 760;
+
+  static const List<Map<String, String>> _chatColorOptions =
+      <Map<String, String>>[
+    {'name': 'Violet arcanique', 'hex': '#C56CFF'},
+    {'name': 'Or héroïque', 'hex': '#FFCF5E'},
+    {'name': 'Vert rôdeur', 'hex': '#65CE72'},
+    {'name': 'Bleu mana', 'hex': '#53A6FF'},
+    {'name': 'Orange forge', 'hex': '#FF9B45'},
+    {'name': 'Turquoise esprit', 'hex': '#66D5CA'},
+    {'name': 'Rose mystique', 'hex': '#FF728D'},
+    {'name': 'Rouge dragon', 'hex': '#E86666'},
+  ];
 
   static const List<Map<String, String>> _tavernSections =
       <Map<String, String>>[
@@ -135,8 +151,11 @@ class _TavernScreenState extends State<TavernScreen> {
   bool _sendingMessage = false;
   bool _isProjectXpAdmin = false;
   bool _resettingTavern = false;
+  final Set<String> _deletingMessageIds = <String>{};
 
   bool _didPrecacheTavernAssets = false;
+  bool _savingChatColor = false;
+  String _currentChatColorHex = '#C56CFF';
   int _lastAutoScrollItemCount = -1;
   double _lastKeyboardInset = 0;
 
@@ -159,6 +178,15 @@ class _TavernScreenState extends State<TavernScreen> {
 
     _loadChannels();
     _loadAdminAccess();
+    unawaited(_loadCurrentChatColor());
+
+    // La Taverne dessine son décor derrière la barre d'état Android.
+    // Les autres écrans restent protégés par leurs propres SafeArea.
+    unawaited(
+      SystemChrome.setEnabledSystemUIMode(
+        SystemUiMode.edgeToEdge,
+      ),
+    );
 
     unawaited(
       ContentModerationService.warmUp(),
@@ -216,6 +244,383 @@ class _TavernScreenState extends State<TavernScreen> {
     _sectionPageController.dispose();
     _sectionTabScrollController.dispose();
     super.dispose();
+  }
+
+  // ===========================================================================
+  // COULEUR PERSONNELLE DU CHAT
+  // ===========================================================================
+
+  Future<void> _loadCurrentChatColor() async {
+    try {
+      final Map<String, dynamic> profile =
+          await ProfileStorage.loadProfile();
+
+      final String stored =
+          profile['chatColor']?.toString().trim() ?? '';
+
+      final Color? parsed = _parseProfileColor(stored);
+
+      if (!mounted || parsed == null) {
+        return;
+      }
+
+      setState(() {
+        _currentChatColorHex = _colorToHex(parsed);
+      });
+    } catch (_) {
+      // Le fallback violet reste volontairement utilisable hors-ligne.
+    }
+  }
+
+  String _colorToHex(Color color) {
+    final int value = color.toARGB32() & 0x00FFFFFF;
+    return '#${value.toRadixString(16).padLeft(6, '0').toUpperCase()}';
+  }
+
+  Color get _currentChatAccent =>
+      _parseProfileColor(_currentChatColorHex) ??
+      const Color(0xffc56cff);
+
+  Future<void> _openChatColorPicker() async {
+    if (_savingChatColor) {
+      return;
+    }
+
+    String? selected = await showDialog<String>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          backgroundColor: const Color(0xff21150e),
+          title: const Text(
+            'Ma couleur de chat',
+            style: TextStyle(
+              color: _tavernGold,
+            ),
+          ),
+          content: SizedBox(
+            width: 300,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'Cette couleur concerne uniquement ton profil : '
+                  'pseudo, avatar et contour de tes propres messages.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Colors.white70,
+                    height: 1.3,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Wrap(
+                  spacing: 11,
+                  runSpacing: 11,
+                  alignment: WrapAlignment.center,
+                  children: _chatColorOptions.map(
+                    (Map<String, String> option) {
+                      final String hex =
+                          option['hex'] ?? '#C56CFF';
+                      final String name =
+                          option['name'] ?? 'Couleur';
+                      final Color color =
+                          _parseProfileColor(hex) ??
+                          const Color(0xffc56cff);
+                      final bool active =
+                          _currentChatColorHex.toUpperCase() ==
+                          hex.toUpperCase();
+
+                      return Tooltip(
+                        message: name,
+                        child: InkWell(
+                          customBorder: const CircleBorder(),
+                          onTap: () {
+                            Navigator.pop(
+                              dialogContext,
+                              hex,
+                            );
+                          },
+                          child: AnimatedContainer(
+                            duration: const Duration(
+                              milliseconds: 150,
+                            ),
+                            width: 42,
+                            height: 42,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: color,
+                              border: Border.all(
+                                color: active
+                                    ? Colors.white
+                                    : Colors.white24,
+                                width: active ? 2.5 : 1,
+                              ),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: color.withValues(
+                                    alpha: 0.24,
+                                  ),
+                                  blurRadius: 8,
+                                ),
+                              ],
+                            ),
+                            child: active
+                                ? const Icon(
+                                    Icons.check_rounded,
+                                    color: Colors.white,
+                                    size: 19,
+                                  )
+                                : null,
+                          ),
+                        ),
+                      );
+                    },
+                  ).toList(),
+                ),
+                const SizedBox(height: 16),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: () {
+                      Navigator.pop(
+                        dialogContext,
+                        '__custom__',
+                      );
+                    },
+                    icon: const Icon(
+                      Icons.tune_rounded,
+                    ),
+                    label: const Text(
+                      'COULEUR PERSONNALISÉE',
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.pop(dialogContext);
+              },
+              child: const Text('Annuler'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (selected == '__custom__' && mounted) {
+      selected = await _openCustomChatColorPicker();
+    }
+
+    if (selected == null || !mounted) {
+      return;
+    }
+
+    final Color? parsed = _parseProfileColor(selected);
+
+    if (parsed == null) {
+      return;
+    }
+
+    final String normalized = _colorToHex(parsed);
+
+    if (normalized == _currentChatColorHex.toUpperCase()) {
+      return;
+    }
+
+    setState(() {
+      _savingChatColor = true;
+      _currentChatColorHex = normalized;
+    });
+
+    final bool saved =
+        await ProfileStorage.saveChatColor(normalized);
+
+    final bool synced = saved
+        ? await TavernProfileService.syncCurrentProfile()
+        : false;
+
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _savingChatColor = false;
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        duration: const Duration(
+          milliseconds: 1200,
+        ),
+        content: Text(
+          saved && synced
+              ? 'Ta couleur de chat est synchronisée.'
+              : saved
+                  ? 'Couleur enregistrée. Synchronisation en attente.'
+                  : 'Impossible d’enregistrer la couleur.',
+        ),
+      ),
+    );
+  }
+
+  Future<String?> _openCustomChatColorPicker() async {
+    final int initial = _currentChatAccent.toARGB32();
+
+    double red = ((initial >> 16) & 0xff).toDouble();
+    double green = ((initial >> 8) & 0xff).toDouble();
+    double blue = (initial & 0xff).toDouble();
+
+    return showDialog<String>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return StatefulBuilder(
+          builder: (
+            BuildContext context,
+            void Function(void Function()) setDialogState,
+          ) {
+            final int r =
+                red.round().clamp(0, 255).toInt();
+            final int g =
+                green.round().clamp(0, 255).toInt();
+            final int b =
+                blue.round().clamp(0, 255).toInt();
+            final Color preview = Color.fromARGB(
+              255,
+              r,
+              g,
+              b,
+            );
+            final String hex = _colorToHex(preview);
+
+            Widget slider(
+              String label,
+              double value,
+              ValueChanged<double> onChanged,
+            ) {
+              return Row(
+                children: [
+                  SizedBox(
+                    width: 20,
+                    child: Text(
+                      label,
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: Slider(
+                      value: value,
+                      min: 0,
+                      max: 255,
+                      divisions: 255,
+                      onChanged: onChanged,
+                    ),
+                  ),
+                  SizedBox(
+                    width: 32,
+                    child: Text(
+                      value.round().toString(),
+                      textAlign: TextAlign.right,
+                      style: const TextStyle(
+                        color: Colors.white60,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ),
+                ],
+              );
+            }
+
+            return AlertDialog(
+              backgroundColor: const Color(0xff21150e),
+              title: const Text(
+                'Couleur personnalisée',
+                style: TextStyle(
+                  color: _tavernGold,
+                ),
+              ),
+              content: SizedBox(
+                width: 310,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 58,
+                      height: 58,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: preview,
+                        border: Border.all(
+                          color: Colors.white70,
+                          width: 2,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      hex,
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    slider(
+                      'R',
+                      red,
+                      (double value) {
+                        setDialogState(() {
+                          red = value;
+                        });
+                      },
+                    ),
+                    slider(
+                      'V',
+                      green,
+                      (double value) {
+                        setDialogState(() {
+                          green = value;
+                        });
+                      },
+                    ),
+                    slider(
+                      'B',
+                      blue,
+                      (double value) {
+                        setDialogState(() {
+                          blue = value;
+                        });
+                      },
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () {
+                    Navigator.pop(dialogContext);
+                  },
+                  child: const Text('Annuler'),
+                ),
+                FilledButton(
+                  onPressed: () {
+                    Navigator.pop(
+                      dialogContext,
+                      hex,
+                    );
+                  },
+                  child: const Text('Appliquer'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
   }
 
   // ===========================================================================
@@ -347,6 +752,133 @@ class _TavernScreenState extends State<TavernScreen> {
       ),
     );
   }
+
+  Future<void> _confirmDeleteTavernMessage(
+    Map<String, dynamic> message,
+  ) async {
+    if (!_isProjectXpAdmin) {
+      return;
+    }
+
+    final String messageId =
+        message['id']?.toString().trim() ?? '';
+
+    if (messageId.isEmpty ||
+        _deletingMessageIds.contains(messageId)) {
+      return;
+    }
+
+    final Map<String, dynamic>? profile =
+        _asStringDynamicMap(message['author_profile']);
+
+    final String displayName =
+        profile?['display_name']?.toString().trim() ?? '';
+
+    final String authorId =
+        message['author_id']?.toString().trim() ?? '';
+
+    final String authorName = displayName.isNotEmpty
+        ? displayName
+        : _fallbackAuthorName(authorId);
+
+    final String content =
+        message['content']?.toString().trim() ?? '';
+
+    final String preview = content.length > 110
+        ? '${content.substring(0, 110)}…'
+        : content;
+
+    final bool? confirmed = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          backgroundColor: const Color(0xff21150e),
+          title: const Text(
+            'Supprimer ce message ?',
+            style: TextStyle(
+              color: Color(0xffffd27a),
+            ),
+          ),
+          content: Text(
+            '$authorName\n\n'
+            '${preview.isEmpty ? 'Message sans contenu.' : preview}\n\n'
+            'Cette action est réservée aux administrateurs et est définitive.',
+            style: const TextStyle(
+              color: Colors.white70,
+              height: 1.4,
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.pop(
+                  dialogContext,
+                  false,
+                );
+              },
+              child: const Text('Annuler'),
+            ),
+            FilledButton.icon(
+              onPressed: () {
+                Navigator.pop(
+                  dialogContext,
+                  true,
+                );
+              },
+              style: FilledButton.styleFrom(
+                backgroundColor: Colors.redAccent,
+                foregroundColor: Colors.white,
+              ),
+              icon: const Icon(
+                Icons.delete_outline_rounded,
+              ),
+              label: const Text('Supprimer'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed != true || !mounted) {
+      return;
+    }
+
+    setState(() {
+      _deletingMessageIds.add(messageId);
+    });
+
+    final bool deleted =
+        await ProjectXpAdminService.deleteTavernMessage(
+      messageId: messageId,
+    );
+
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _deletingMessageIds.remove(messageId);
+    });
+
+    if (!deleted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Suppression impossible. Vérifie le RPC et les droits administrateur.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        duration: Duration(milliseconds: 900),
+        content: Text('Message supprimé.'),
+      ),
+    );
+  }
+
 
   Future<void> _loadChannels() async {
     try {
@@ -592,38 +1124,46 @@ class _TavernScreenState extends State<TavernScreen> {
   Widget build(
     BuildContext context,
   ) {
-    return Scaffold(
-      backgroundColor: _tavernBackground,
-      resizeToAvoidBottomInset: true,
-      body: SafeArea(
-        child: LayoutBuilder(
-          builder: (
-            BuildContext context,
-            BoxConstraints constraints,
-          ) {
-            final double width =
-                constraints.maxWidth
-                    .clamp(
-                      0.0,
-                      _maxTavernWidth,
-                    )
-                    .toDouble();
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: const SystemUiOverlayStyle(
+        statusBarColor: Colors.transparent,
+        statusBarIconBrightness: Brightness.light,
+        statusBarBrightness: Brightness.dark,
+      ),
+      child: Scaffold(
+        backgroundColor: _tavernBackground,
+        resizeToAvoidBottomInset: false,
+        body: SafeArea(
+          top: false,
+          child: LayoutBuilder(
+            builder: (
+              BuildContext context,
+              BoxConstraints constraints,
+            ) {
+              final double width =
+                  constraints.maxWidth
+                      .clamp(
+                        0.0,
+                        _maxTavernWidth,
+                      )
+                      .toDouble();
 
-            return Center(
-              child: SizedBox(
-                width: width,
-                height: constraints.maxHeight,
-                child: Column(
-                  children: [
-                    _buildHeader(),
-                    Expanded(
-                      child: _buildContent(),
-                    ),
-                  ],
+              return Center(
+                child: SizedBox(
+                  width: width,
+                  height: constraints.maxHeight,
+                  child: Column(
+                    children: [
+                      _buildHeader(),
+                      Expanded(
+                        child: _buildContent(),
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-            );
-          },
+              );
+            },
+          ),
         ),
       ),
     );
@@ -638,12 +1178,16 @@ class _TavernScreenState extends State<TavernScreen> {
       ) {
         final double width = constraints.maxWidth;
         final double screenHeight = MediaQuery.sizeOf(context).height;
+        final double systemTop = MediaQuery.paddingOf(context).top;
         final bool shortScreen = screenHeight < 690;
 
-        // Proportion exacte du header de la maquette approuvée : 971 x 260.
-        final double height = (width * (260 / 971))
+        // Le visuel principal garde ses proportions : on ajoute seulement
+        // quelques pixels en dessous pour que la présence ait enfin sa place.
+        final double artHeight = (width * (260 / 971))
             .clamp(shortScreen ? 94.0 : 100.0, shortScreen ? 108.0 : 118.0)
             .toDouble();
+        final double presenceBandHeight = width < 340 ? 17.0 : 20.0;
+        final double height = artHeight + presenceBandHeight;
 
         final double dpr = MediaQuery.devicePixelRatioOf(context);
         final int cacheWidth = (width * dpr)
@@ -651,41 +1195,95 @@ class _TavernScreenState extends State<TavernScreen> {
             .clamp(420, 1180)
             .toInt();
 
-        final double backLeft = width * (25 / 971);
-        final double backTop = height * (135 / 260);
-        final double backWidth = width * (116 / 971);
-        final double backHeight = height * (92 / 260);
+        // Le Communicateur global occupe 48 x 42 à systemTop + 11 / right 8.
+        // Les deux actions locales sont centrées exactement sur ce même axe.
+        final double phoneTop = systemTop + 11.0;
+        const double phoneHeight = 42.0;
+        const double phoneWidth = 48.0;
+        const double phoneRight = 8.0;
+        final double phoneReserve = phoneWidth + phoneRight;
 
-        // Le téléphone reste le GlobalCommunicatorAlert de Project XP.
-        // On lui réserve sa zone à droite, sans rien rasteriser dans Flutter.
-        final double phoneReserve = width < 330 ? 46.0 : 54.0;
+        const double backSize = 42.0;
+        final double backLeft = width < 340 ? 7.0 : 10.0;
+        final double backTop = phoneTop;
+
+        final double paletteSize = width < 340 ? 28.0 : 30.0;
+        final double paletteTop = phoneTop + ((phoneHeight - paletteSize) / 2);
+        final double paletteRight = phoneRight + phoneWidth + 7.0;
 
         return SizedBox(
           height: height,
           child: Stack(
-            fit: StackFit.expand,
+            clipBehavior: Clip.none,
             children: [
-              Image.asset(
-                _tavernHeaderAsset,
-                fit: BoxFit.fill,
-                cacheWidth: cacheWidth,
-                filterQuality: FilterQuality.high,
-                gaplessPlayback: true,
+              const Positioned.fill(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        Color(0xff160d08),
+                        Color(0xff21140c),
+                        Color(0xff130b07),
+                      ],
+                    ),
+                  ),
+                ),
               ),
+              Positioned(
+                left: 0,
+                right: 0,
+                top: 0,
+                height: artHeight,
+                child: Image.asset(
+                  _tavernHeaderAsset,
+                  fit: BoxFit.fill,
+                  cacheWidth: cacheWidth,
+                  filterQuality: FilterQuality.high,
+                  gaplessPlayback: true,
+                ),
+              ),
+
+              // Retour au Hall : aucune plaque Flutter ni cache visuel.
+              // La zone tactile est invisible et partage exactement le même
+              // top/hauteur que le Communicateur global.
               Positioned(
                 left: backLeft,
                 top: backTop,
-                width: backWidth,
-                height: backHeight,
-                child: _buildHeaderHitTarget(
-                  tooltip: 'Retour au Hall',
-                  onPressed: () => Navigator.pop(context),
+                width: backSize,
+                height: backSize,
+                child: Tooltip(
+                  message: 'Retour au Hall',
+                  child: Semantics(
+                    button: true,
+                    label: 'Retour au Hall',
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.translucent,
+                      onTap: () => Navigator.pop(context),
+                      child: const Center(
+                        child: Icon(
+                          Icons.arrow_back_ios_new_rounded,
+                          color: Color(0xffe1b96e),
+                          size: 21,
+                          shadows: [
+                            Shadow(
+                              color: Color(0xee000000),
+                              blurRadius: 4,
+                              offset: Offset(0, 1),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
               ),
+
               if (_isProjectXpAdmin)
                 Positioned(
-                  left: backLeft + backWidth - 4,
-                  top: 3,
+                  left: backLeft + backSize + 2.0,
+                  top: backTop + ((backSize - 28) / 2),
                   child: SizedBox(
                     width: 28,
                     height: 28,
@@ -733,13 +1331,44 @@ class _TavernScreenState extends State<TavernScreen> {
                     ),
                   ),
                 ),
-              // La capsule grandit naturellement avec 1, 12, 128, 1000... 
-              // Elle est ancrée à droite juste avant le téléphone global.
+
+              // Palette personnelle juste à côté du téléphone. Le téléphone
+              // lui-même n'est pas déplacé et reste global à toute l'app.
               Positioned(
-                right: phoneReserve + (width < 340 ? 5 : 7),
-                top: width < 340 ? 7.0 : 8.0,
-                child: _buildPresenceCount(),
+                right: paletteRight,
+                top: paletteTop,
+                width: paletteSize,
+                height: paletteSize,
+                child: _buildHeaderChatColorButton(),
               ),
+
+              // La présence possède une vraie continuation de bois :
+              // aucune barre noire rapportée sous le titre.
+              Positioned(
+                left: 0,
+                right: 0,
+                top: artHeight,
+                height: presenceBandHeight,
+                child: IgnorePointer(
+                  child: Image.asset(
+                    _tavernTabsBackgroundAsset,
+                    fit: BoxFit.cover,
+                    alignment: Alignment.center,
+                    filterQuality: FilterQuality.medium,
+                  ),
+                ),
+              ),
+              Positioned(
+                left: 0,
+                right: 0,
+                top: artHeight,
+                height: presenceBandHeight,
+                child: Center(
+                  child: _buildPresenceUnderTitle(),
+                ),
+              ),
+
+              // Espace réservé au Communicateur global.
               Positioned(
                 right: 0,
                 top: 0,
@@ -753,23 +1382,52 @@ class _TavernScreenState extends State<TavernScreen> {
     );
   }
 
-  Widget _buildHeaderHitTarget({
-    required String tooltip,
-    required VoidCallback onPressed,
-  }) {
+  Widget _buildHeaderChatColorButton() {
+    final Color currentAccent = _currentChatAccent;
+
     return Tooltip(
-      message: tooltip,
+      message: 'Changer ma couleur de chat',
       child: Material(
         color: Colors.transparent,
         child: InkWell(
           customBorder: const CircleBorder(),
-          onTap: onPressed,
+          onTap: _savingChatColor ? null : _openChatColorPicker,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: const Color(0xe51a100b),
+              border: Border.all(
+                color: currentAccent.withValues(alpha: 0.95),
+                width: 1.35,
+              ),
+              boxShadow: const [
+                BoxShadow(
+                  color: Color(0x66000000),
+                  blurRadius: 5,
+                  offset: Offset(0, 2),
+                ),
+              ],
+            ),
+            child: _savingChatColor
+                ? Padding(
+                    padding: const EdgeInsets.all(6),
+                    child: CircularProgressIndicator(
+                      strokeWidth: 1.5,
+                      color: currentAccent,
+                    ),
+                  )
+                : Icon(
+                    Icons.palette_outlined,
+                    size: 16,
+                    color: currentAccent,
+                  ),
+          ),
         ),
       ),
     );
   }
 
-  Widget _buildPresenceCount() {
+  Widget _buildPresenceUnderTitle() {
     return StreamBuilder<int>(
       stream: OnlinePresenceService.instance.onlineCountStream,
       initialData: OnlinePresenceService.instance.currentCount,
@@ -779,78 +1437,60 @@ class _TavernScreenState extends State<TavernScreen> {
       ) {
         final int count = snapshot.data ?? 0;
         final bool compact = MediaQuery.sizeOf(context).width < 340;
+        final String label = count == 1
+            ? '$count aventurier en ligne'
+            : '$count aventuriers en ligne';
 
-        return AnimatedSize(
+        return AnimatedSwitcher(
           duration: const Duration(milliseconds: 180),
-          curve: Curves.easeOutCubic,
-          alignment: Alignment.centerRight,
-          child: Container(
-            height: compact ? 28 : 31,
-            padding: EdgeInsets.symmetric(
-              horizontal: compact ? 7 : 9,
-            ),
-            decoration: BoxDecoration(
-              color: const Color(0xf21a110c),
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(
-                color: const Color(0xffb57a37),
-                width: 0.9,
+          switchInCurve: Curves.easeOutCubic,
+          switchOutCurve: Curves.easeInCubic,
+          child: Row(
+            key: ValueKey<int>(count),
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: compact ? 5.0 : 6.0,
+                height: compact ? 5.0 : 6.0,
+                decoration: const BoxDecoration(
+                  color: Color(0xff38d66b),
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                      color: Color(0x5538d66b),
+                      blurRadius: 4,
+                    ),
+                  ],
+                ),
               ),
-              boxShadow: const [
-                BoxShadow(
-                  color: Color(0x77000000),
-                  blurRadius: 6,
-                  offset: Offset(0, 2),
+              SizedBox(width: compact ? 4 : 5),
+              Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.fade,
+                softWrap: false,
+                style: TextStyle(
+                  color: const Color(0xffd8c09a),
+                  fontSize: compact ? 7.6 : 8.4,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.08,
+                  height: 1,
+                  shadows: const [
+                    Shadow(
+                      color: Color(0xdd000000),
+                      blurRadius: 3,
+                      offset: Offset(0, 1),
+                    ),
+                  ],
                 ),
-              ],
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: compact ? 7 : 8,
-                  height: compact ? 7 : 8,
-                  decoration: const BoxDecoration(
-                    color: Color(0xff38d66b),
-                    shape: BoxShape.circle,
-                    boxShadow: [
-                      BoxShadow(
-                        color: Color(0x6638d66b),
-                        blurRadius: 5,
-                      ),
-                    ],
-                  ),
-                ),
-                SizedBox(width: compact ? 5 : 6),
-                Icon(
-                  Icons.people_alt_rounded,
-                  size: compact ? 14 : 16,
-                  color: const Color(0xffdbc4a2),
-                ),
-                SizedBox(width: compact ? 4 : 5),
-                Text(
-                  count.toString(),
-                  maxLines: 1,
-                  style: TextStyle(
-                    color: const Color(0xffffd47a),
-                    fontSize: compact ? 13 : 14.5,
-                    fontWeight: FontWeight.w900,
-                    height: 1,
-                    shadows: const [
-                      Shadow(
-                        color: Color(0xaa000000),
-                        blurRadius: 3,
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
+              ),
+            ],
           ),
         );
       },
     );
   }
+
 
   Widget _buildContent() {
     if (_loadingChannels) {
@@ -995,6 +1635,9 @@ class _TavernScreenState extends State<TavernScreen> {
     final Map<String, String> section = _tavernSections[index];
     final bool selected = index == _selectedSectionIndex;
     final String label = section['label'] ?? '';
+    final String displayLabel = label == 'Quêtes & Aventures'
+        ? 'Quêtes &\nAventures'
+        : label;
     final String icon = section['icon'] ?? '';
 
     return AnimatedScale(
@@ -1033,17 +1676,19 @@ class _TavernScreenState extends State<TavernScreen> {
                     const SizedBox(width: 5),
                     Flexible(
                       child: Text(
-                        label,
+                        displayLabel,
                         maxLines: 2,
                         textAlign: TextAlign.center,
                         overflow: TextOverflow.fade,
-                        softWrap: true,
+                        softWrap: false,
                         style: TextStyle(
                           color: selected
                               ? const Color(0xffffd878)
                               : const Color(0xffeee2d5),
-                          fontSize: label.length > 14 ? 9.8 : 10.8,
-                          height: 1.02,
+                          fontSize: label == 'Quêtes & Aventures'
+                              ? 9.35
+                              : (label.length > 14 ? 9.8 : 10.8),
+                          height: label == 'Quêtes & Aventures' ? 0.98 : 1.02,
                           fontWeight: FontWeight.w800,
                           shadows: const [
                             Shadow(
@@ -1193,123 +1838,115 @@ class _TavernScreenState extends State<TavernScreen> {
   Widget _buildComptoir(
     Map<String, dynamic> channel,
   ) {
-    final String channelId =
-        channel['id']?.toString() ?? '';
+    final String channelId = channel['id']?.toString() ?? '';
 
     if (channelId.isEmpty) {
       return const Center(
-        child: Text(
-          'Channel invalide.',
-        ),
+        child: Text('Channel invalide.'),
       );
     }
 
-    final Stream<List<Map<String, dynamic>>>? messageStream =
-        _messageStream;
-
-    final double keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
-    if ((keyboardInset - _lastKeyboardInset).abs() > 1) {
-      _lastKeyboardInset = keyboardInset;
-      if (keyboardInset > 0) {
-        _scheduleScrollToBottom();
-      }
-    }
+    final Stream<List<Map<String, dynamic>>>? messageStream = _messageStream;
 
     if (messageStream == null) {
       return const Center(
-        child: Text(
-          'Flux du channel indisponible.',
-        ),
+        child: Text('Flux du channel indisponible.'),
       );
     }
 
-    return Column(
-      children: [
-        Expanded(
-          child:
-              StreamBuilder<List<Map<String, dynamic>>>(
-            key:
-                ValueKey(
-              channelId,
-            ),
-            stream:
-                messageStream,
-            builder: (
-              BuildContext context,
-              AsyncSnapshot<List<Map<String, dynamic>>> snapshot,
-            ) {
-              if (snapshot.connectionState ==
-                      ConnectionState.waiting &&
-                  !snapshot.hasData) {
-                return const Center(
-                  child:
-                      CircularProgressIndicator(
-                    color:
-                        _tavernGold,
-                  ),
-                );
-              }
+    return LayoutBuilder(
+      builder: (
+        BuildContext context,
+        BoxConstraints constraints,
+      ) {
+        final double width = constraints.maxWidth;
+        final double keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
+        final double composerHeight = _composerHeightForWidth(width);
 
-              if (snapshot.hasError) {
-                return Center(
-                  child: Padding(
-                    padding:
-                        const EdgeInsets.all(
-                      24,
-                    ),
-                    child: Text(
-                      'Impossible de charger les messages.\n'
-                      '${snapshot.error}',
-                      textAlign:
-                          TextAlign.center,
-                    ),
-                  ),
-                );
-              }
+        if ((keyboardInset - _lastKeyboardInset).abs() > 1) {
+          _lastKeyboardInset = keyboardInset;
+          if (keyboardInset > 0) {
+            _scheduleScrollToBottom();
+          }
+        }
 
-              final List<Map<String, dynamic>> messages =
-                  snapshot.data ??
-                      <Map<String, dynamic>>[];
-
-              final String pendingContent =
-                  _pendingMessageContent
-                          ?.trim() ??
-                      '';
-
-              final bool hasPendingMessage =
-                  pendingContent.isNotEmpty &&
-                      _pendingMessageChannelId ==
-                          channelId;
-
-              final int renderedItemCount =
-                  messages.length +
-                      (hasPendingMessage
-                          ? 1
-                          : 0);
-
-              if (renderedItemCount !=
-                  _lastAutoScrollItemCount) {
-                _lastAutoScrollItemCount =
-                    renderedItemCount;
-
-                if (renderedItemCount > 0) {
-                  _scheduleScrollToBottom();
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            // Le décor reste plein écran de la Taverne. Il ne change plus de
+            // taille quand Android ouvre le clavier.
+            StreamBuilder<List<Map<String, dynamic>>>(
+              key: ValueKey(channelId),
+              stream: messageStream,
+              builder: (
+                BuildContext context,
+                AsyncSnapshot<List<Map<String, dynamic>>> snapshot,
+              ) {
+                if (snapshot.connectionState == ConnectionState.waiting &&
+                    !snapshot.hasData) {
+                  return const Center(
+                    child: CircularProgressIndicator(color: _tavernGold),
+                  );
                 }
-              }
 
-              return _buildChatStage(
-                messages: messages,
-                hasPendingMessage:
-                    hasPendingMessage,
-                pendingContent:
-                    pendingContent,
-              );
-            },
-          ),
-        ),
-        _buildMessageComposer(),
-      ],
+                if (snapshot.hasError) {
+                  return Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Text(
+                        'Impossible de charger les messages.\n${snapshot.error}',
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  );
+                }
+
+                final List<Map<String, dynamic>> messages =
+                    snapshot.data ?? <Map<String, dynamic>>[];
+
+                final String pendingContent =
+                    _pendingMessageContent?.trim() ?? '';
+                final bool hasPendingMessage = pendingContent.isNotEmpty &&
+                    _pendingMessageChannelId == channelId;
+                final int renderedItemCount =
+                    messages.length + (hasPendingMessage ? 1 : 0);
+
+                if (renderedItemCount != _lastAutoScrollItemCount) {
+                  _lastAutoScrollItemCount = renderedItemCount;
+                  if (renderedItemCount > 0) {
+                    _scheduleScrollToBottom();
+                  }
+                }
+
+                return _buildChatStage(
+                  messages: messages,
+                  hasPendingMessage: hasPendingMessage,
+                  pendingContent: pendingContent,
+                  obscuredBottom: keyboardInset + composerHeight + 12,
+                );
+              },
+            ),
+
+            // Seule la barre de saisie remonte au-dessus du clavier.
+            AnimatedPositioned(
+              duration: const Duration(milliseconds: 180),
+              curve: Curves.easeOutCubic,
+              left: 0,
+              right: 0,
+              bottom: keyboardInset,
+              height: composerHeight,
+              child: _buildMessageComposer(),
+            ),
+          ],
+        );
+      },
     );
+  }
+
+  double _composerHeightForWidth(double width) {
+    return (width * (159 / 971))
+        .clamp(54.0, 68.0)
+        .toDouble();
   }
 
   Widget _buildDiscussionHeader() {
@@ -1322,66 +1959,99 @@ class _TavernScreenState extends State<TavernScreen> {
         final double height = (width * 0.072)
             .clamp(24.0, 30.0)
             .toDouble();
-
         return SizedBox(
           height: height,
-          child: Row(
+          child: Stack(
+            alignment: Alignment.center,
             children: [
-              Expanded(
-                child: Container(
-                  height: 1,
-                  margin: const EdgeInsets.only(left: 12, right: 8),
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [
-                        Colors.transparent,
-                        _tavernGold.withValues(alpha: 0.45),
+              Row(
+                children: [
+                  Expanded(
+                    child: Container(
+                      height: 1,
+                      margin: const EdgeInsets.only(
+                        left: 12,
+                        right: 8,
+                      ),
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: [
+                            Colors.transparent,
+                            _tavernGold.withValues(
+                              alpha: 0.45,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.only(
+                      right: 6,
+                    ),
+                    child: Text(
+                      '✦',
+                      style: TextStyle(
+                        color: _tavernGold.withValues(
+                          alpha: 0.92,
+                        ),
+                        fontSize: width < 340 ? 8 : 9,
+                      ),
+                    ),
+                  ),
+                  Text(
+                    'DISCUSSION GÉNÉRALE',
+                    maxLines: 1,
+                    style: TextStyle(
+                      color: const Color(0xffcaa0f5),
+                      fontSize: width < 340 ? 8.9 : 9.9,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.18,
+                      shadows: const [
+                        Shadow(
+                          color: Color(0xaa000000),
+                          blurRadius: 3,
+                          offset: Offset(0, 1),
+                        ),
                       ],
                     ),
                   ),
-                ),
-              ),
-              Text(
-                'DISCUSSION GÉNÉRALE',
-                maxLines: 1,
-                style: TextStyle(
-                  color: const Color(0xffcaa0f5),
-                  fontSize: width < 340 ? 9.4 : 10.6,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 0.18,
-                  shadows: const [
-                    Shadow(
-                      color: Color(0xaa000000),
-                      blurRadius: 3,
-                      offset: Offset(0, 1),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
                     ),
-                  ],
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 6),
-                child: Text(
-                  '✦',
-                  style: TextStyle(
-                    color: _tavernGold.withValues(alpha: 0.92),
-                    fontSize: width < 340 ? 8 : 9,
-                  ),
-                ),
-              ),
-              Expanded(
-                child: Container(
-                  height: 1,
-                  margin: const EdgeInsets.only(left: 2, right: 12),
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [
-                        _tavernGold.withValues(alpha: 0.45),
-                        Colors.transparent,
-                      ],
+                    child: Text(
+                      '✦',
+                      style: TextStyle(
+                        color: _tavernGold.withValues(
+                          alpha: 0.92,
+                        ),
+                        fontSize: width < 340 ? 8 : 9,
+                      ),
                     ),
                   ),
-                ),
+                  Expanded(
+                    child: Container(
+                      height: 1,
+                      margin: const EdgeInsets.only(
+                        left: 2,
+                        right: 12,
+                      ),
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: [
+                            _tavernGold.withValues(
+                              alpha: 0.45,
+                            ),
+                            Colors.transparent,
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
+
             ],
           ),
         );
@@ -1393,6 +2063,7 @@ class _TavernScreenState extends State<TavernScreen> {
     required List<Map<String, dynamic>> messages,
     required bool hasPendingMessage,
     required String pendingContent,
+    required double obscuredBottom,
   }) {
     return LayoutBuilder(
       builder: (
@@ -1467,7 +2138,7 @@ class _TavernScreenState extends State<TavernScreen> {
               width < 350
                   ? 8
                   : 12,
-              24,
+              obscuredBottom.clamp(68.0, 520.0).toDouble(),
             ),
             itemCount:
                 messages.length +
@@ -1530,18 +2201,10 @@ class _TavernScreenState extends State<TavernScreen> {
                     end:
                         Alignment.bottomCenter,
                     colors: [
-                      Color(
-                        0x26080504,
-                      ),
-                      Color(
-                        0x480a0705,
-                      ),
-                      Color(
-                        0x520a0705,
-                      ),
-                      Color(
-                        0x30080504,
-                      ),
+                      Color(0x14080504),
+                      Color(0x1e0a0705),
+                      Color(0x240a0705),
+                      Color(0x12080504),
                     ],
                     stops: [
                       0,
@@ -1582,27 +2245,53 @@ class _TavernScreenState extends State<TavernScreen> {
                         BoxDecoration(
                       color:
                           const Color(
-                        0x4d0a0705,
+                        0x140a0705,
                       ),
                       border:
                           Border(
                         left:
                             BorderSide(
                           color:
-                              Colors.black
+                              _tavernGoldDeep
                                   .withValues(
                             alpha:
-                                0.26,
+                                0.66,
                           ),
+                          width:
+                              1.35,
                         ),
                         right:
                             BorderSide(
                           color:
-                              Colors.black
+                              _tavernGoldDeep
                                   .withValues(
                             alpha:
-                                0.26,
+                                0.66,
                           ),
+                          width:
+                              1.35,
+                        ),
+                        top:
+                            BorderSide(
+                          color:
+                              _tavernGoldDeep
+                                  .withValues(
+                            alpha:
+                                0.50,
+                          ),
+                          width:
+                              1.05,
+                        ),
+                        bottom:
+                            BorderSide(
+                          color:
+                              _tavernGoldDeep
+                                  .withValues(
+                            alpha:
+                                0.46,
+                          ),
+                          width:
+                              1.05,
                         ),
                       ),
                     ),
@@ -1635,9 +2324,7 @@ class _TavernScreenState extends State<TavernScreen> {
               left: shelfWidth,
               right: shelfWidth,
               top: 4,
-              child: IgnorePointer(
-                child: _buildDiscussionHeader(),
-              ),
+              child: _buildDiscussionHeader(),
             ),
           ],
         );
@@ -2134,7 +2821,10 @@ class _TavernScreenState extends State<TavernScreen> {
   Widget _buildMessage(
     Map<String, dynamic> message,
   ) {
-    final String authorId = message['author_id']?.toString() ?? '';
+    final String messageId =
+        message['id']?.toString().trim() ?? '';
+    final String authorId =
+        message['author_id']?.toString() ?? '';
     final Map<String, dynamic>? profile =
         _asStringDynamicMap(message['author_profile']);
     final String displayName =
@@ -2142,35 +2832,177 @@ class _TavernScreenState extends State<TavernScreen> {
     final String authorName = displayName.isNotEmpty
         ? displayName
         : _fallbackAuthorName(authorId);
-    final String content = message['content']?.toString() ?? '';
+    final String content =
+        message['content']?.toString() ?? '';
     final String createdAt = _formatMessageTime(
       message['created_at']?.toString(),
     );
-    final Color accent = _messageAccent(profile, authorId);
+    final Color accent = _messageAccent(
+      profile,
+      authorId,
+    );
     final Color bubbleColor = Color.lerp(
-          const Color(0xee17100c),
+          const Color(0xe817100c),
           accent,
-          0.045,
+          0.026,
         ) ??
-        const Color(0xee17100c);
+        const Color(0xe817100c);
 
     return LayoutBuilder(
-      builder: (BuildContext context, BoxConstraints constraints) {
+      builder: (
+        BuildContext context,
+        BoxConstraints constraints,
+      ) {
         final double width = constraints.maxWidth;
         final bool compact = width < 245;
         final double avatarSize = (width * 0.145)
             .clamp(36.0, 50.0)
             .toDouble();
+        final double gap = compact ? 6 : 8;
+        final double horizontalPadding =
+            (compact ? 9 : 12) * 2;
+
+        final double availableBubbleWidth =
+            math.max(
+          96,
+          math.min(
+            560,
+            width - avatarSize - gap,
+          ),
+        );
+
+        final TextStyle authorStyle =
+            TextStyle(
+          color: accent,
+          fontWeight: FontWeight.w800,
+          fontSize: compact ? 11.5 : 13,
+        );
+
+        final TextStyle timeStyle =
+            TextStyle(
+          color: const Color(0xffd7cbbf)
+              .withValues(alpha: 0.68),
+          fontSize: compact ? 8.8 : 9.8,
+        );
+
+        final TextStyle contentStyle =
+            TextStyle(
+          color: const Color(0xfff5eee6),
+          fontSize: compact ? 12.5 : 13.5,
+          height: 1.34,
+        );
+
+        double singleLineWidth(
+          String value,
+          TextStyle style,
+          double maxWidth,
+        ) {
+          if (value.isEmpty) {
+            return 0;
+          }
+
+          final TextPainter painter =
+              TextPainter(
+            text: TextSpan(
+              text: value,
+              style: style,
+            ),
+            maxLines: 1,
+            textDirection:
+                Directionality.of(context),
+          )..layout(
+              maxWidth: math.max(
+                1,
+                maxWidth,
+              ),
+            );
+
+          return painter.width;
+        }
+
+        final double innerMaxWidth =
+            math.max(
+          24,
+          availableBubbleWidth -
+              horizontalPadding,
+        );
+
+        final double authorWidth =
+            math.min(
+          compact ? 110 : 170,
+          singleLineWidth(
+            authorName,
+            authorStyle,
+            compact ? 110 : 170,
+          ),
+        );
+
+        final double timeWidth =
+            singleLineWidth(
+          createdAt,
+          timeStyle,
+          60,
+        );
+
+        final double adminWidth =
+            _isProjectXpAdmin &&
+                    messageId.isNotEmpty
+                ? 26
+                : 0;
+
+        final double headerWidth =
+            authorWidth +
+                (createdAt.isEmpty
+                    ? 0
+                    : 8 + timeWidth) +
+                adminWidth;
+
+        final double contentWidth =
+            singleLineWidth(
+          content,
+          contentStyle,
+          innerMaxWidth,
+        );
+
+        final double minimumBubbleWidth =
+            math.min(
+          availableBubbleWidth,
+          compact ? 132 : 156,
+        );
+
+        final double bubbleWidth =
+            math.max(
+          minimumBubbleWidth,
+          math.min(
+            availableBubbleWidth,
+            math.max(
+                  headerWidth,
+                  contentWidth,
+                ) +
+                horizontalPadding,
+          ),
+        );
+
+        final bool deleting =
+            messageId.isNotEmpty &&
+                _deletingMessageIds.contains(
+                  messageId,
+                );
 
         return Align(
           alignment: Alignment.centerLeft,
           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 560),
+            constraints:
+                const BoxConstraints(
+              maxWidth: 560,
+            ),
             child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              crossAxisAlignment:
+                  CrossAxisAlignment.start,
               children: [
                 GestureDetector(
-                  behavior: HitTestBehavior.opaque,
+                  behavior:
+                      HitTestBehavior.opaque,
                   onTap: () {
                     _openPlayerCard(
                       authorId: authorId,
@@ -2185,83 +3017,162 @@ class _TavernScreenState extends State<TavernScreen> {
                     accent: accent,
                   ),
                 ),
-                SizedBox(width: compact ? 6 : 8),
+                SizedBox(width: gap),
                 Flexible(
-                  child: Container(
-                    padding: EdgeInsets.fromLTRB(
-                      compact ? 9 : 12,
-                      compact ? 7 : 9,
-                      compact ? 9 : 12,
-                      compact ? 8 : 10,
-                    ),
-                    decoration: BoxDecoration(
-                      color: bubbleColor,
-                      borderRadius: BorderRadius.circular(compact ? 12 : 14),
-                      border: Border.all(
-                        color: accent.withValues(alpha: 0.48),
-                        width: 0.8,
-                      ),
-                      boxShadow: [
-                        const BoxShadow(
-                          color: Color(0x52000000),
-                          blurRadius: 8,
-                          offset: Offset(0, 3),
+                  child: Align(
+                    alignment:
+                        Alignment.centerLeft,
+                    child: SizedBox(
+                      width: bubbleWidth,
+                      child: Container(
+                        padding:
+                            EdgeInsets.fromLTRB(
+                          compact ? 9 : 12,
+                          compact ? 7 : 9,
+                          compact ? 9 : 12,
+                          compact ? 8 : 10,
                         ),
-                        BoxShadow(
-                          color: accent.withValues(alpha: 0.05),
-                          blurRadius: 8,
-                        ),
-                      ],
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Expanded(
-                              child: GestureDetector(
-                                behavior: HitTestBehavior.opaque,
-                                onTap: () {
-                                  _openPlayerCard(
-                                    authorId: authorId,
-                                    profile: profile,
-                                  );
-                                },
-                                child: Text(
-                                  authorName,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    color: accent,
-                                    fontWeight: FontWeight.w800,
-                                    fontSize: compact ? 11.5 : 13,
-                                  ),
-                                ),
-                              ),
+                        decoration:
+                            BoxDecoration(
+                          color: bubbleColor,
+                          borderRadius:
+                              BorderRadius.circular(
+                            compact ? 12 : 14,
+                          ),
+                          border:
+                              Border.all(
+                            color: accent
+                                .withValues(
+                              alpha: 0.34,
                             ),
-                            if (createdAt.isNotEmpty) ...[
-                              const SizedBox(width: 8),
-                              Text(
-                                createdAt,
-                                style: TextStyle(
-                                  color: const Color(0xffd7cbbf)
-                                      .withValues(alpha: 0.56),
-                                  fontSize: compact ? 8.8 : 9.8,
-                                ),
+                            width: 0.68,
+                          ),
+                          boxShadow: [
+                            const BoxShadow(
+                              color:
+                                  Color(
+                                0x48000000,
                               ),
-                            ],
+                              blurRadius: 7,
+                              offset:
+                                  Offset(0, 3),
+                            ),
+                            BoxShadow(
+                              color: accent
+                                  .withValues(
+                                alpha:
+                                    0.018,
+                              ),
+                              blurRadius: 5,
+                            ),
                           ],
                         ),
-                        const SizedBox(height: 4),
-                        Text(
-                          content,
-                          style: TextStyle(
-                            color: const Color(0xfff5eee6),
-                            fontSize: compact ? 12.5 : 13.5,
-                            height: 1.34,
-                          ),
+                        child: Column(
+                          mainAxisSize:
+                              MainAxisSize.min,
+                          crossAxisAlignment:
+                              CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Expanded(
+                                  child:
+                                      GestureDetector(
+                                    behavior:
+                                        HitTestBehavior.opaque,
+                                    onTap: () {
+                                      _openPlayerCard(
+                                        authorId:
+                                            authorId,
+                                        profile:
+                                            profile,
+                                      );
+                                    },
+                                    child: Text(
+                                      authorName,
+                                      maxLines: 1,
+                                      overflow:
+                                          TextOverflow.ellipsis,
+                                      style:
+                                          authorStyle,
+                                    ),
+                                  ),
+                                ),
+                                if (createdAt
+                                    .isNotEmpty) ...[
+                                  const SizedBox(
+                                    width: 8,
+                                  ),
+                                  Text(
+                                    createdAt,
+                                    style:
+                                        timeStyle,
+                                  ),
+                                ],
+                                if (_isProjectXpAdmin &&
+                                    messageId
+                                        .isNotEmpty) ...[
+                                  const SizedBox(
+                                    width: 3,
+                                  ),
+                                  SizedBox(
+                                    width: 22,
+                                    height: 22,
+                                    child:
+                                        IconButton(
+                                      tooltip:
+                                          'Supprimer ce message',
+                                      padding:
+                                          EdgeInsets.zero,
+                                      visualDensity:
+                                          VisualDensity.compact,
+                                      onPressed:
+                                          deleting
+                                              ? null
+                                              : () {
+                                                  _confirmDeleteTavernMessage(
+                                                    message,
+                                                  );
+                                                },
+                                      icon:
+                                          deleting
+                                              ? const SizedBox(
+                                                  width: 12,
+                                                  height: 12,
+                                                  child:
+                                                      CircularProgressIndicator(
+                                                    strokeWidth:
+                                                        1.5,
+                                                    color:
+                                                        Colors.redAccent,
+                                                  ),
+                                                )
+                                              : const Icon(
+                                                  Icons
+                                                      .delete_outline_rounded,
+                                                  size:
+                                                      15,
+                                                  color:
+                                                      Color(
+                                                    0xffd87474,
+                                                  ),
+                                                ),
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ),
+                            const SizedBox(
+                              height: 4,
+                            ),
+                            Text(
+                              content,
+                              style:
+                                  contentStyle,
+                            ),
+                          ],
                         ),
-                      ],
+                      ),
                     ),
                   ),
                 ),
@@ -2272,6 +3183,7 @@ class _TavernScreenState extends State<TavernScreen> {
       },
     );
   }
+
 
   Widget _buildAuthorAvatar({
     required Map<String, dynamic>? profile,
@@ -2447,6 +3359,15 @@ class _TavernScreenState extends State<TavernScreen> {
     Map<String, dynamic>? profile,
     String authorId,
   ) {
+    final String currentUserId =
+        SupabaseService.currentUser?.id ?? '';
+
+    if (authorId.isNotEmpty &&
+        currentUserId.isNotEmpty &&
+        authorId == currentUserId) {
+      return _currentChatAccent;
+    }
+
     const List<String> directKeys = <String>[
       'message_color',
       'chat_color',
@@ -3443,14 +4364,12 @@ class _TavernScreenState extends State<TavernScreen> {
         BoxConstraints constraints,
       ) {
         final double width = constraints.maxWidth;
-        final double height = (width * (159 / 971))
-            .clamp(54.0, 68.0)
-            .toDouble();
+        final double height = _composerHeightForWidth(width);
 
         final double plusLeft = width * (25 / 971);
         final double plusWidth = width * (125 / 971);
-        final double fieldLeft = width * (148 / 971);
-        final double fieldRight = width * (288 / 971);
+        final double fieldLeft = width * (160 / 971);
+        final double fieldRight = width * (296 / 971);
         final double emojiLeft = width * (698 / 971);
         final double emojiWidth = width * (108 / 971);
         final double sendLeft = width * (808 / 971);
@@ -3467,29 +4386,37 @@ class _TavernScreenState extends State<TavernScreen> {
                 filterQuality: FilterQuality.high,
                 gaplessPlayback: true,
               ),
+              // Zone intérieure exacte du cadre rasterisé (asset 971x159).
+              // Le TextField remplit cette zone et centre lui-même le texte :
+              // plus aucun décalage manuel de baseline.
               Positioned(
                 left: fieldLeft,
                 right: fieldRight,
-                top: height * 0.30,
-                bottom: height * 0.22,
+                top: height * (36 / 159),
+                bottom: height * (35 / 159),
                 child: TextField(
                   controller: _messageController,
-                  minLines: 1,
-                  maxLines: 2,
+                  minLines: null,
+                  maxLines: null,
+                  expands: true,
                   maxLength: 2000,
+                  textAlignVertical: TextAlignVertical.center,
                   textCapitalization: TextCapitalization.sentences,
                   textInputAction: TextInputAction.send,
                   scrollPadding: const EdgeInsets.only(bottom: 110),
                   style: TextStyle(
                     color: const Color(0xfff3ece4),
-                    fontSize: width < 330 ? 12.5 : 13.5,
-                    height: 1.1,
+                    fontSize: width < 330 ? 12.2 : 13.2,
+                    height: 1.0,
                   ),
                   decoration: const InputDecoration(
-                    isDense: true,
+                    isCollapsed: true,
                     counterText: '',
                     hintText: 'Écrire un message...',
-                    hintStyle: TextStyle(color: Colors.white38),
+                    hintStyle: TextStyle(
+                      color: Colors.white38,
+                      height: 1.0,
+                    ),
                     border: InputBorder.none,
                     contentPadding: EdgeInsets.zero,
                   ),
@@ -3539,7 +4466,7 @@ class _TavernScreenState extends State<TavernScreen> {
                       child: Icon(
                         Icons.sentiment_satisfied_alt_rounded,
                         color: Color(0xffffc75d),
-                        size: 23,
+                        size: 22,
                       ),
                     ),
                   ),
@@ -3567,7 +4494,7 @@ class _TavernScreenState extends State<TavernScreen> {
                           : const Icon(
                               Icons.send_rounded,
                               color: Color(0xffffcf72),
-                              size: 25,
+                              size: 24,
                             ),
                     ),
                   ),

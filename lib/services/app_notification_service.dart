@@ -195,7 +195,7 @@ class AppNotificationService with WidgetsBindingObserver {
           token?.trim();
 
       debugPrint(
-        'FCM TOKEN PROJECT XP : $token',
+        'Token FCM récupéré pour cette installation.',
       );
 
       if (_lastKnownFcmToken != null &&
@@ -220,7 +220,7 @@ class AppNotificationService with WidgetsBindingObserver {
             token.trim();
 
         debugPrint(
-          'FCM TOKEN RAFRAÎCHI : $cleanToken',
+          'Token FCM rafraîchi.',
         );
 
         if (cleanToken.isEmpty) {

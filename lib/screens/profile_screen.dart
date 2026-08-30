@@ -348,7 +348,7 @@ class _ProfileScreenState
   }
 
   Future<void> _showChatColorPopup() async {
-    final String? selected = await showDialog<String>(
+    String? selected = await showDialog<String>(
       context: context,
       builder: (BuildContext dialogContext) {
         return AlertDialog(
@@ -359,49 +359,64 @@ class _ProfileScreenState
           ),
           content: SizedBox(
             width: 300,
-            child: Wrap(
-              spacing: 12,
-              runSpacing: 12,
-              alignment: WrapAlignment.center,
-              children: _chatColors.map((Map<String, String> option) {
-                final String hex = option['hex'] ?? '#C56CFF';
-                final String name = option['name'] ?? '';
-                final bool active = hex == chatColor;
-                final Color color = _chatColorValue(hex);
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Wrap(
+                  spacing: 12,
+                  runSpacing: 12,
+                  alignment: WrapAlignment.center,
+                  children: _chatColors.map((Map<String, String> option) {
+                    final String hex = option['hex'] ?? '#C56CFF';
+                    final String name = option['name'] ?? '';
+                    final bool active = hex == chatColor;
+                    final Color color = _chatColorValue(hex);
 
-                return Tooltip(
-                  message: name,
-                  child: InkWell(
-                    customBorder: const CircleBorder(),
-                    onTap: () => Navigator.pop(dialogContext, hex),
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 150),
-                      width: 48,
-                      height: 48,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: color,
-                        border: Border.all(
-                          color: active ? Colors.white : Colors.white24,
-                          width: active ? 3 : 1,
-                        ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: color.withValues(alpha: 0.28),
-                            blurRadius: 10,
+                    return Tooltip(
+                      message: name,
+                      child: InkWell(
+                        customBorder: const CircleBorder(),
+                        onTap: () => Navigator.pop(dialogContext, hex),
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 150),
+                          width: 48,
+                          height: 48,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: color,
+                            border: Border.all(
+                              color: active ? Colors.white : Colors.white24,
+                              width: active ? 3 : 1,
+                            ),
+                            boxShadow: [
+                              BoxShadow(
+                                color: color.withValues(alpha: 0.28),
+                                blurRadius: 10,
+                              ),
+                            ],
                           ),
-                        ],
+                          child: active
+                              ? const Icon(
+                                  Icons.check_rounded,
+                                  color: Colors.white,
+                                )
+                              : null,
+                        ),
                       ),
-                      child: active
-                          ? const Icon(
-                              Icons.check_rounded,
-                              color: Colors.white,
-                            )
-                          : null,
-                    ),
+                    );
+                  }).toList(),
+                ),
+                const SizedBox(height: 18),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: () =>
+                        Navigator.pop(dialogContext, '__custom__'),
+                    icon: const Icon(Icons.tune_rounded),
+                    label: const Text('COULEUR PERSONNALISÉE'),
                   ),
-                );
-              }).toList(),
+                ),
+              ],
             ),
           ),
           actions: [
@@ -414,12 +429,16 @@ class _ProfileScreenState
       },
     );
 
+    if (selected == '__custom__' && mounted) {
+      selected = await _showCustomChatColorPopup();
+    }
+
     if (selected == null || selected == chatColor || !mounted) {
       return;
     }
 
     setState(() {
-      chatColor = selected;
+      chatColor = selected!;
     });
 
     final bool saved =
@@ -442,6 +461,164 @@ class _ProfileScreenState
               : 'Impossible d’enregistrer la couleur.',
         ),
       ),
+    );
+  }
+
+  Future<String?> _showCustomChatColorPopup() async {
+    final String clean = chatColor.replaceFirst('#', '');
+    final int initial = int.tryParse(clean, radix: 16) ?? 0xC56CFF;
+
+    double red = ((initial >> 16) & 0xff).toDouble();
+    double green = ((initial >> 8) & 0xff).toDouble();
+    double blue = (initial & 0xff).toDouble();
+
+    return showDialog<String>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return StatefulBuilder(
+          builder: (
+            BuildContext context,
+            void Function(void Function()) setDialogState,
+          ) {
+            final int r = red.round().clamp(0, 255).toInt();
+            final int g = green.round().clamp(0, 255).toInt();
+            final int b = blue.round().clamp(0, 255).toInt();
+            final Color preview = Color.fromARGB(255, r, g, b);
+            final String hex = (
+              '#${r.toRadixString(16).padLeft(2, '0')}'
+              '${g.toRadixString(16).padLeft(2, '0')}'
+              '${b.toRadixString(16).padLeft(2, '0')}'
+            ).toUpperCase();
+
+            Widget slider({
+              required String label,
+              required double value,
+              required ValueChanged<double> onChanged,
+            }) {
+              return Row(
+                children: [
+                  SizedBox(
+                    width: 22,
+                    child: Text(
+                      label,
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: Slider(
+                      value: value,
+                      min: 0,
+                      max: 255,
+                      divisions: 255,
+                      onChanged: onChanged,
+                    ),
+                  ),
+                  SizedBox(
+                    width: 34,
+                    child: Text(
+                      value.round().toString(),
+                      textAlign: TextAlign.right,
+                      style: const TextStyle(color: Colors.white60),
+                    ),
+                  ),
+                ],
+              );
+            }
+
+            return AlertDialog(
+              backgroundColor: const Color(0xff21150e),
+              title: const Text(
+                'Couleur personnalisée',
+                style: TextStyle(color: Colors.amber),
+              ),
+              content: SingleChildScrollView(
+                child: SizedBox(
+                  width: 320,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      AnimatedContainer(
+                        duration: const Duration(milliseconds: 100),
+                        width: double.infinity,
+                        height: 58,
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          color: preview,
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(color: Colors.white30),
+                        ),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 5,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.46),
+                            borderRadius: BorderRadius.circular(99),
+                          ),
+                          child: Text(
+                            hex,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w900,
+                              letterSpacing: 0.8,
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      slider(
+                        label: 'R',
+                        value: red,
+                        onChanged: (double value) {
+                          setDialogState(() => red = value);
+                        },
+                      ),
+                      slider(
+                        label: 'V',
+                        value: green,
+                        onChanged: (double value) {
+                          setDialogState(() => green = value);
+                        },
+                      ),
+                      slider(
+                        label: 'B',
+                        value: blue,
+                        onChanged: (double value) {
+                          setDialogState(() => blue = value);
+                        },
+                      ),
+                      const SizedBox(height: 4),
+                      const Text(
+                        'La couleur choisie sera utilisée pour le pseudo, '
+                        'l’avatar et le contour des messages.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: Colors.white54,
+                          fontSize: 11,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext),
+                  child: const Text('Annuler'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.pop(dialogContext, hex),
+                  child: const Text('Appliquer'),
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
   }
 

@@ -48,4 +48,39 @@ class ProjectXpAdminService {
       return null;
     }
   }
+
+
+  // ===========================================================================
+  // SUPPRIMER UN MESSAGE PUBLIC DE LA TAVERNE
+  //
+  // La suppression est réalisée via un RPC SECURITY DEFINER qui vérifie
+  // project_admins côté PostgreSQL. Le bouton client n'est qu'une interface :
+  // les droits administrateur ne reposent jamais sur Flutter.
+  // ===========================================================================
+
+  static Future<bool> deleteTavernMessage({
+    required String messageId,
+  }) async {
+    final String cleanMessageId =
+        messageId.trim();
+
+    if (cleanMessageId.isEmpty) {
+      return false;
+    }
+
+    try {
+      final dynamic response =
+          await SupabaseService.client.rpc(
+        'project_xp_admin_delete_tavern_message',
+        params: <String, dynamic>{
+          'p_message_id': cleanMessageId,
+        },
+      );
+
+      return response == true;
+    } catch (_) {
+      return false;
+    }
+  }
+
 }
