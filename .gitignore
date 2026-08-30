@@ -43,3 +43,24 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Project XP - secrets / credentials (never commit server secrets)
+.env
+.env.*
+!.env.example
+secrets/
+credentials/
+*.pem
+*.p12
+*.pfx
+*.key
+*.jks
+*.keystore
+/android/key.properties
+**/service-account*.json
+**/*service_account*.json
+**/firebase-service-account*.json
+
+# Local/generated backup files
+*.bak
+*.tmp

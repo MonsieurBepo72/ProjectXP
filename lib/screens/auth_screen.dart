@@ -816,7 +816,7 @@ class _AuthScreenState
               child: Column(
                 children: [
                   Image.asset(
-                    'assets/images/logo_project_xp.png',
+                    'assets/icon/app_icon.png',
                     width: 210,
                     fit:
                         BoxFit.contain,

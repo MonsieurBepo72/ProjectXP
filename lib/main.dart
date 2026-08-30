@@ -30,24 +30,27 @@ Future<void> main() async {
   // lourde n'est attendue ici.
   // ===========================================================================
 
-  await Future.wait<dynamic>(
-    <Future<dynamic>>[
-      Firebase.initializeApp(
-        options:
-            DefaultFirebaseOptions.currentPlatform,
-      ),
-      Supabase.initialize(
-        url:
-            SupabaseConfig.url,
-        publishableKey:
-            SupabaseConfig.publishableKey,
-      ),
-      SystemChrome.setPreferredOrientations(
-        <DeviceOrientation>[
-          DeviceOrientation.portraitUp,
-          DeviceOrientation.portraitDown,
-        ],
-      ),
+  // Firebase et l'orientation sont utiles, mais ne doivent pas empêcher
+  // Project XP de démarrer si une plateforme n'est pas encore configurée
+  // (ex. iOS avant la future configuration FlutterFire).
+  final Future<void> firebaseFuture =
+      _initializeFirebaseSafely();
+
+  final Future<void> orientationFuture =
+      _setPreferredOrientationsSafely();
+
+  // Supabase reste une dépendance critique : auth, profils et social
+  // reposent dessus. Une configuration Supabase invalide doit donc rester
+  // visible immédiatement au développement au lieu d'être masquée.
+  await Supabase.initialize(
+    url: SupabaseConfig.url,
+    publishableKey: SupabaseConfig.publishableKey,
+  );
+
+  await Future.wait<void>(
+    <Future<void>>[
+      firebaseFuture,
+      orientationFuture,
     ],
   );
 
@@ -61,8 +64,43 @@ Future<void> main() async {
 
   // Tout le reste travaille pendant l'intro / le splash.
   unawaited(
-    ProjectXpStartupService.instance.start(),
+    ProjectXpStartupService.instance.start().onError(
+      (Object error, StackTrace _) {
+        debugPrint(
+          'Démarrage différé Project XP interrompu : $error',
+        );
+      },
+    ),
   );
+}
+
+Future<void> _initializeFirebaseSafely() async {
+  try {
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
+  } catch (error) {
+    // Les fonctions dépendantes de Firebase (FCM, notifications) possèdent
+    // leurs propres garde-fous. L'app peut donc continuer sans push.
+    debugPrint(
+      'Firebase indisponible au démarrage : $error',
+    );
+  }
+}
+
+Future<void> _setPreferredOrientationsSafely() async {
+  try {
+    await SystemChrome.setPreferredOrientations(
+      <DeviceOrientation>[
+        DeviceOrientation.portraitUp,
+        DeviceOrientation.portraitDown,
+      ],
+    );
+  } catch (error) {
+    debugPrint(
+      'Verrouillage orientation indisponible : $error',
+    );
+  }
 }
 
 // =============================================================================
