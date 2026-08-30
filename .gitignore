@@ -64,3 +64,9 @@ credentials/
 # Local/generated backup files
 *.bak
 *.tmp
+# Project XP - local backup/debug residue
+project_xp_backup_before_*
+*.orig
+*.rej
+*.broken
+*.broken.*

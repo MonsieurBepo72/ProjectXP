@@ -2,12 +2,21 @@
 
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
+
+const int _serverPort = 8080;
+const int _maxRequestBytes = 12 * 1024 * 1024;
+
+const String _allowLanEnvironmentKey =
+    'PROJECT_XP_DEV_SERVER_ALLOW_LAN';
+const String _devTokenEnvironmentKey =
+    'PROJECT_XP_DEV_SERVER_TOKEN';
 
 Future<void> main() async {
-  final String? apiKey =
-      Platform.environment['OPENAI_API_KEY'];
+  final String apiKey =
+      (Platform.environment['OPENAI_API_KEY'] ?? '').trim();
 
-  if (apiKey == null || apiKey.isEmpty) {
+  if (apiKey.isEmpty) {
     print('ERREUR : OPENAI_API_KEY est absente.');
     print(
       'PowerShell : \$env:OPENAI_API_KEY="ta_cle"',
@@ -15,38 +24,89 @@ Future<void> main() async {
     exit(1);
   }
 
-  final server = await HttpServer.bind(
-    InternetAddress.anyIPv4,
-    8080,
+  final bool allowLan = _isEnabled(
+    Platform.environment[_allowLanEnvironmentKey],
+  );
+
+  final String devToken =
+      (Platform.environment[_devTokenEnvironmentKey] ?? '').trim();
+
+  // Par défaut le serveur n'écoute QUE localhost.
+  // Une exposition sur le LAN doit être explicitement activée et protégée.
+  if (allowLan && devToken.length < 24) {
+    print(
+      'ERREUR : le mode LAN exige '
+      '$_devTokenEnvironmentKey (24 caractères minimum).',
+    );
+    exit(1);
+  }
+
+  final InternetAddress bindAddress = allowLan
+      ? InternetAddress.anyIPv4
+      : InternetAddress.loopbackIPv4;
+
+  final HttpServer server = await HttpServer.bind(
+    bindAddress,
+    _serverPort,
   );
 
   print('====================================');
-  print(' PROJECT XP - Avatar Server');
-  print(' http://127.0.0.1:8080');
+  print(' PROJECT XP - Avatar Server (DEV)');
+  print(
+    allowLan
+        ? ' LAN activé sur le port $_serverPort'
+        : ' Local uniquement : http://127.0.0.1:$_serverPort',
+  );
   print('====================================');
 
-  await for (final request in server) {
+  await for (final HttpRequest request in server) {
+    if (allowLan && !_hasValidDevToken(request, devToken)) {
+      await _sendError(
+        request,
+        HttpStatus.unauthorized,
+        'Requête de développement non autorisée.',
+      );
+      continue;
+    }
+
     if (request.method == 'POST' &&
         request.uri.path == '/avatar/generate') {
       await _generateAvatar(
         request,
         apiKey,
       );
-
       continue;
     }
 
-    request.response
-      ..statusCode = HttpStatus.notFound
-      ..headers.contentType = ContentType.json
-      ..write(
-        jsonEncode({
-          'error': 'Route inexistante.',
-        }),
-      );
-
-    await request.response.close();
+    await _sendError(
+      request,
+      HttpStatus.notFound,
+      'Route inexistante.',
+    );
   }
+}
+
+bool _isEnabled(String? value) {
+  switch (value?.trim().toLowerCase()) {
+    case '1':
+    case 'true':
+    case 'yes':
+    case 'on':
+      return true;
+    default:
+      return false;
+  }
+}
+
+bool _hasValidDevToken(
+  HttpRequest request,
+  String expectedToken,
+) {
+  final String providedToken =
+      (request.headers.value('x-project-xp-dev-token') ?? '').trim();
+
+  return providedToken.isNotEmpty &&
+      providedToken == expectedToken;
 }
 
 Future<void> _generateAvatar(
@@ -54,11 +114,49 @@ Future<void> _generateAvatar(
   String apiKey,
 ) async {
   try {
-    final String body =
-        await utf8.decoder.bind(request).join();
+    if (request.contentLength > _maxRequestBytes) {
+      await _sendError(
+        request,
+        HttpStatus.requestEntityTooLarge,
+        'Image trop volumineuse.',
+      );
+      return;
+    }
 
-    final Map<String, dynamic> input =
-        jsonDecode(body);
+    final BytesBuilder requestBytes = BytesBuilder(copy: false);
+    int receivedBytes = 0;
+
+    await for (final List<int> chunk in request) {
+      receivedBytes += chunk.length;
+
+      if (receivedBytes > _maxRequestBytes) {
+        await _sendError(
+          request,
+          HttpStatus.requestEntityTooLarge,
+          'Image trop volumineuse.',
+        );
+        return;
+      }
+
+      requestBytes.add(chunk);
+    }
+
+    final String body = utf8.decode(
+      requestBytes.takeBytes(),
+    );
+
+    final dynamic decodedInput = jsonDecode(body);
+
+    if (decodedInput is! Map<String, dynamic>) {
+      await _sendError(
+        request,
+        HttpStatus.badRequest,
+        'Corps JSON invalide.',
+      );
+      return;
+    }
+
+    final Map<String, dynamic> input = decodedInput;
 
     final String? imageBase64 =
         input['imageBase64'] as String?;
