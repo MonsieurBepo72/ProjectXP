@@ -269,6 +269,13 @@ class TavernProfileService {
     }
 
     // -------------------------------------------------------------------------
+    // COULEUR DU CHAT
+    // -------------------------------------------------------------------------
+
+    final String chatColor =
+        profile['chatColor']?.toString().trim() ?? '#C56CFF';
+
+    // -------------------------------------------------------------------------
     // DONNÉES PUBLIQUES FINALES
     // -------------------------------------------------------------------------
 
@@ -278,6 +285,7 @@ class TavernProfileService {
       'platforms': platforms,
       'availability': availability,
       'networks': visibleNetworks,
+      'chat_color': chatColor,
     };
   }
 

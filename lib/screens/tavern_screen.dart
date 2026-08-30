@@ -24,7 +24,7 @@ class TavernScreen extends StatefulWidget {
 class _TavernScreenState extends State<TavernScreen> {
 
   // ===========================================================================
-  // TAVERNE V8 — MAQUETTE VERROUILLÉE + UI DYNAMIQUE
+  // TAVERNE V8.1 — POLISH VISUEL + UI DYNAMIQUE
   // ===========================================================================
   //
   // Le décor lourd est maintenant porté par des images dédiées : header,
@@ -60,8 +60,6 @@ class _TavernScreenState extends State<TavernScreen> {
   static const String _tavernTabsBackgroundAsset =
       'assets/images/tavern/v8_tabs_bg.jpg';
 
-  static const String _tavernDiscussionStripAsset =
-      'assets/images/tavern/v8_discussion_strip.jpg';
 
   static const Color _tavernBackground =
       Color(0xff0d0806);
@@ -197,7 +195,6 @@ class _TavernScreenState extends State<TavernScreen> {
           _tavernSimpleBackgroundAsset,
           _tavernComposerAsset,
           _tavernTabsBackgroundAsset,
-          _tavernDiscussionStripAsset,
         ];
 
         for (final String asset in assets) {
@@ -546,18 +543,49 @@ class _TavernScreenState extends State<TavernScreen> {
     );
   }
 
-  void _scrollToBottom() {
+  void _scrollToBottom({
+    bool animated = true,
+  }) {
     if (!_messageScrollController.hasClients) {
       return;
     }
 
-    _messageScrollController.animateTo(
-      _messageScrollController.position.maxScrollExtent,
-      duration: const Duration(
-        milliseconds: 350,
-      ),
-      curve: Curves.easeOut,
-    );
+    final double target =
+        _messageScrollController.position.maxScrollExtent;
+
+    if (animated) {
+      _messageScrollController.animateTo(
+        target,
+        duration: const Duration(milliseconds: 260),
+        curve: Curves.easeOutCubic,
+      );
+    } else {
+      _messageScrollController.jumpTo(target);
+    }
+  }
+
+  void _scheduleScrollToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+
+      _scrollToBottom(animated: false);
+
+      for (final int delay in <int>[70, 170]) {
+        unawaited(
+          Future<void>.delayed(
+            Duration(milliseconds: delay),
+            () {
+              if (!mounted) {
+                return;
+              }
+              _scrollToBottom();
+            },
+          ),
+        );
+      }
+    });
   }
 
   @override
@@ -630,7 +658,7 @@ class _TavernScreenState extends State<TavernScreen> {
 
         // Le téléphone reste le GlobalCommunicatorAlert de Project XP.
         // On lui réserve sa zone à droite, sans rien rasteriser dans Flutter.
-        final double phoneReserve = width < 330 ? 43.0 : 52.0;
+        final double phoneReserve = width < 330 ? 46.0 : 54.0;
 
         return SizedBox(
           height: height,
@@ -708,8 +736,8 @@ class _TavernScreenState extends State<TavernScreen> {
               // La capsule grandit naturellement avec 1, 12, 128, 1000... 
               // Elle est ancrée à droite juste avant le téléphone global.
               Positioned(
-                right: phoneReserve + 7,
-                top: height * 0.41,
+                right: phoneReserve + (width < 340 ? 5 : 7),
+                top: width < 340 ? 7.0 : 8.0,
                 child: _buildPresenceCount(),
               ),
               Positioned(
@@ -757,17 +785,16 @@ class _TavernScreenState extends State<TavernScreen> {
           curve: Curves.easeOutCubic,
           alignment: Alignment.centerRight,
           child: Container(
-            key: ValueKey<int>(count.toString().length),
-            height: compact ? 29 : 32,
+            height: compact ? 28 : 31,
             padding: EdgeInsets.symmetric(
-              horizontal: compact ? 8 : 10,
+              horizontal: compact ? 7 : 9,
             ),
             decoration: BoxDecoration(
               color: const Color(0xf21a110c),
-              borderRadius: BorderRadius.circular(13),
+              borderRadius: BorderRadius.circular(14),
               border: Border.all(
                 color: const Color(0xffb57a37),
-                width: 1.0,
+                width: 0.9,
               ),
               boxShadow: const [
                 BoxShadow(
@@ -905,15 +932,15 @@ class _TavernScreenState extends State<TavernScreen> {
         BoxConstraints constraints,
       ) {
         final double width = constraints.maxWidth;
-        final double selectorHeight = (width * 0.17)
-            .clamp(58.0, 72.0)
+        final double selectorHeight = (width * 0.155)
+            .clamp(54.0, 66.0)
             .toDouble();
         // Environ 2,7 onglets visibles sur un téléphone standard : on comprend
         // immédiatement que le bandeau se fait glisser, sans grands espaces.
-        final double itemWidth = (width * 0.355)
-            .clamp(118.0, 174.0)
+        final double itemWidth = (width * 0.34)
+            .clamp(112.0, 166.0)
             .toDouble();
-        final double gap = width < 340 ? 2.0 : 3.0;
+        final double gap = width < 340 ? 0.5 : 1.5;
 
         return SizedBox(
           height: selectorHeight,
@@ -942,8 +969,8 @@ class _TavernScreenState extends State<TavernScreen> {
                 scrollDirection: Axis.horizontal,
                 physics: const BouncingScrollPhysics(),
                 padding: EdgeInsets.symmetric(
-                  horizontal: width < 340 ? 3 : 5,
-                  vertical: 4,
+                  horizontal: width < 340 ? 2 : 3,
+                  vertical: 3,
                 ),
                 itemCount: _tavernSections.length,
                 separatorBuilder: (_, _) => SizedBox(width: gap),
@@ -1184,11 +1211,7 @@ class _TavernScreenState extends State<TavernScreen> {
     if ((keyboardInset - _lastKeyboardInset).abs() > 1) {
       _lastKeyboardInset = keyboardInset;
       if (keyboardInset > 0) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) {
-            _scrollToBottom();
-          }
-        });
+        _scheduleScrollToBottom();
       }
     }
 
@@ -1202,7 +1225,6 @@ class _TavernScreenState extends State<TavernScreen> {
 
     return Column(
       children: [
-        _buildDiscussionHeader(),
         Expanded(
           child:
               StreamBuilder<List<Map<String, dynamic>>>(
@@ -1271,13 +1293,7 @@ class _TavernScreenState extends State<TavernScreen> {
                     renderedItemCount;
 
                 if (renderedItemCount > 0) {
-                  WidgetsBinding
-                      .instance
-                      .addPostFrameCallback(
-                    (_) {
-                      _scrollToBottom();
-                    },
-                  );
+                  _scheduleScrollToBottom();
                 }
               }
 
@@ -1298,40 +1314,69 @@ class _TavernScreenState extends State<TavernScreen> {
 
   Widget _buildDiscussionHeader() {
     return LayoutBuilder(
-      builder: (BuildContext context, BoxConstraints constraints) {
+      builder: (
+        BuildContext context,
+        BoxConstraints constraints,
+      ) {
         final double width = constraints.maxWidth;
-        final double height = (width * (90 / 971))
-            .clamp(31.0, 39.0)
+        final double height = (width * 0.072)
+            .clamp(24.0, 30.0)
             .toDouble();
 
         return SizedBox(
           height: height,
-          child: Stack(
-            fit: StackFit.expand,
+          child: Row(
             children: [
-              Image.asset(
-                _tavernDiscussionStripAsset,
-                fit: BoxFit.fill,
-                filterQuality: FilterQuality.high,
-                gaplessPlayback: true,
+              Expanded(
+                child: Container(
+                  height: 1,
+                  margin: const EdgeInsets.only(left: 12, right: 8),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [
+                        Colors.transparent,
+                        _tavernGold.withValues(alpha: 0.45),
+                      ],
+                    ),
+                  ),
+                ),
               ),
-              Center(
-                child: Padding(
-                  padding: const EdgeInsets.only(top: 1),
-                  child: Text(
-                    'DISCUSSION GÉNÉRALE',
-                    maxLines: 1,
-                    style: TextStyle(
-                      color: const Color(0xffcda1ff),
-                      fontSize: width < 340 ? 10.5 : 12.2,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 0.28,
-                      shadows: const [
-                        Shadow(
-                          color: Color(0x88000000),
-                          blurRadius: 3,
-                          offset: Offset(0, 1),
-                        ),
+              Text(
+                'DISCUSSION GÉNÉRALE',
+                maxLines: 1,
+                style: TextStyle(
+                  color: const Color(0xffcaa0f5),
+                  fontSize: width < 340 ? 9.4 : 10.6,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.18,
+                  shadows: const [
+                    Shadow(
+                      color: Color(0xaa000000),
+                      blurRadius: 3,
+                      offset: Offset(0, 1),
+                    ),
+                  ],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 6),
+                child: Text(
+                  '✦',
+                  style: TextStyle(
+                    color: _tavernGold.withValues(alpha: 0.92),
+                    fontSize: width < 340 ? 8 : 9,
+                  ),
+                ),
+              ),
+              Expanded(
+                child: Container(
+                  height: 1,
+                  margin: const EdgeInsets.only(left: 2, right: 12),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [
+                        _tavernGold.withValues(alpha: 0.45),
+                        Colors.transparent,
                       ],
                     ),
                   ),
@@ -1418,11 +1463,11 @@ class _TavernScreenState extends State<TavernScreen> {
               width < 350
                   ? 8
                   : 12,
-              10,
+              width < 350 ? 36 : 40,
               width < 350
                   ? 8
                   : 12,
-              26,
+              24,
             ),
             itemCount:
                 messages.length +
@@ -1585,6 +1630,14 @@ class _TavernScreenState extends State<TavernScreen> {
                     ),
                   ),
               ],
+            ),
+            Positioned(
+              left: shelfWidth,
+              right: shelfWidth,
+              top: 4,
+              child: IgnorePointer(
+                child: _buildDiscussionHeader(),
+              ),
             ),
           ],
         );
@@ -2097,7 +2150,7 @@ class _TavernScreenState extends State<TavernScreen> {
     final Color bubbleColor = Color.lerp(
           const Color(0xee17100c),
           accent,
-          0.065,
+          0.045,
         ) ??
         const Color(0xee17100c);
 
@@ -2145,8 +2198,8 @@ class _TavernScreenState extends State<TavernScreen> {
                       color: bubbleColor,
                       borderRadius: BorderRadius.circular(compact ? 12 : 14),
                       border: Border.all(
-                        color: accent.withValues(alpha: 0.64),
-                        width: 0.9,
+                        color: accent.withValues(alpha: 0.48),
+                        width: 0.8,
                       ),
                       boxShadow: [
                         const BoxShadow(
@@ -2155,8 +2208,8 @@ class _TavernScreenState extends State<TavernScreen> {
                           offset: Offset(0, 3),
                         ),
                         BoxShadow(
-                          color: accent.withValues(alpha: 0.08),
-                          blurRadius: 10,
+                          color: accent.withValues(alpha: 0.05),
+                          blurRadius: 8,
                         ),
                       ],
                     ),
@@ -3396,12 +3449,12 @@ class _TavernScreenState extends State<TavernScreen> {
 
         final double plusLeft = width * (25 / 971);
         final double plusWidth = width * (125 / 971);
-        final double fieldLeft = width * (150 / 971);
-        final double fieldRight = width * (286 / 971);
-        final double emojiLeft = width * (700 / 971);
-        final double emojiWidth = width * (105 / 971);
-        final double sendLeft = width * (810 / 971);
-        final double sendWidth = width * (135 / 971);
+        final double fieldLeft = width * (148 / 971);
+        final double fieldRight = width * (288 / 971);
+        final double emojiLeft = width * (698 / 971);
+        final double emojiWidth = width * (108 / 971);
+        final double sendLeft = width * (808 / 971);
+        final double sendWidth = width * (138 / 971);
 
         return SizedBox(
           height: height,
@@ -3417,8 +3470,8 @@ class _TavernScreenState extends State<TavernScreen> {
               Positioned(
                 left: fieldLeft,
                 right: fieldRight,
-                top: height * 0.28,
-                bottom: height * 0.23,
+                top: height * 0.30,
+                bottom: height * 0.22,
                 child: TextField(
                   controller: _messageController,
                   minLines: 1,
@@ -3440,11 +3493,7 @@ class _TavernScreenState extends State<TavernScreen> {
                     border: InputBorder.none,
                     contentPadding: EdgeInsets.zero,
                   ),
-                  onTap: () {
-                    WidgetsBinding.instance.addPostFrameCallback((_) {
-                      _scrollToBottom();
-                    });
-                  },
+                  onTap: _scheduleScrollToBottom,
                   onSubmitted: (_) => _sendMessage(),
                 ),
               ),
@@ -3490,7 +3539,7 @@ class _TavernScreenState extends State<TavernScreen> {
                       child: Icon(
                         Icons.sentiment_satisfied_alt_rounded,
                         color: Color(0xffffc75d),
-                        size: 24,
+                        size: 23,
                       ),
                     ),
                   ),
@@ -3518,7 +3567,7 @@ class _TavernScreenState extends State<TavernScreen> {
                           : const Icon(
                               Icons.send_rounded,
                               color: Color(0xffffcf72),
-                              size: 26,
+                              size: 25,
                             ),
                     ),
                   ),

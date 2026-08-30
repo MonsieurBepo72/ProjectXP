@@ -251,6 +251,7 @@ class ProfileStorage {
         availability,
     required List<Map<String, String>>
         networks,
+    required String chatColor,
   }) async {
     final String? userId =
         await AuthService.getCurrentUserId();
@@ -337,6 +338,9 @@ class ProfileStorage {
             ),
           )
           .toList(),
+
+      // Couleur d'identité utilisée dans le Comptoir (pseudo, avatar, bulle).
+      'chatColor': chatColor,
     };
 
     final bool saved =
@@ -354,6 +358,49 @@ class ProfileStorage {
     );
 
     return saved;
+  }
+
+  static Future<bool> saveChatColor(
+    String chatColor,
+  ) async {
+    final String? userId =
+        await AuthService.getCurrentUserId();
+
+    if (userId == null || userId.isEmpty) {
+      return false;
+    }
+
+    final SharedPreferences prefs =
+        await SharedPreferences.getInstance();
+
+    final Map<String, dynamic> data =
+        await _loadExistingAccountProfile(
+      prefs,
+      userId,
+    );
+
+    if (data.isEmpty) {
+      final String? username =
+          await AuthService.getCurrentUsername();
+      final String? email =
+          await AuthService.getCurrentEmail();
+
+      data.addAll(
+        _defaultProfile(
+          userId: userId,
+          username: username ?? 'Mon aventurier',
+          email: email ?? '',
+        ),
+      );
+    }
+
+    data['chatColor'] = chatColor;
+
+    return _writeProfile(
+      prefs,
+      userId,
+      data,
+    );
   }
 
   // ===========================================================================
@@ -454,6 +501,7 @@ class ProfileStorage {
       },
       'networks':
           <Map<String, String>>[],
+      'chatColor': '#C56CFF',
     };
   }
 

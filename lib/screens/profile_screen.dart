@@ -8,6 +8,7 @@ import 'package:project_xp/services/auth_service.dart';
 import 'package:project_xp/services/avatar_storage.dart';
 import 'package:project_xp/services/profile_storage.dart';
 import 'package:project_xp/services/session_service.dart';
+import 'package:project_xp/services/tavern_profile_service.dart';
 import 'package:project_xp/widgets/avatar_renderer.dart';
 import 'package:project_xp/widgets/brand_icon.dart';
 
@@ -62,6 +63,20 @@ class _ProfileScreenState
 
   // TODO: Récupérer depuis le service de profil utilisateur
   String description = '';
+
+  String chatColor = '#C56CFF';
+
+  static const List<Map<String, String>> _chatColors =
+      <Map<String, String>>[
+    {'name': 'Violet arcanique', 'hex': '#C56CFF'},
+    {'name': 'Or héroïque', 'hex': '#FFCF5E'},
+    {'name': 'Vert rôdeur', 'hex': '#65CE72'},
+    {'name': 'Bleu mana', 'hex': '#53A6FF'},
+    {'name': 'Orange forge', 'hex': '#FF9B45'},
+    {'name': 'Turquoise esprit', 'hex': '#66D5CA'},
+    {'name': 'Rose mystique', 'hex': '#FF728D'},
+    {'name': 'Rouge dragon', 'hex': '#E86666'},
+  ];
 
   final List<String> jeux = []; // Chargé depuis ProfileStorage
 
@@ -172,6 +187,9 @@ class _ProfileScreenState
             data['description'] as String? ??
                 "Je cherche des compagnons pour partir à l'aventure !";
 
+        chatColor =
+            data['chatColor']?.toString() ?? '#C56CFF';
+
         jeux
           ..clear()
           ..addAll(
@@ -274,7 +292,7 @@ class _ProfileScreenState
     String? pseudoOverride,
     String? descriptionOverride,
   }) async {
-    return ProfileStorage.saveProfile(
+    final bool saved = await ProfileStorage.saveProfile(
       pseudo:
           pseudoOverride ?? pseudo,
       description:
@@ -304,6 +322,126 @@ class _ProfileScreenState
             ),
           )
           .toList(),
+      chatColor: chatColor,
+    );
+
+    if (saved) {
+      await TavernProfileService.syncCurrentProfile();
+    }
+
+    return saved;
+  }
+
+  String _chatColorLabel() {
+    for (final Map<String, String> option in _chatColors) {
+      if (option['hex'] == chatColor) {
+        return option['name'] ?? 'Couleur personnalisée';
+      }
+    }
+    return 'Couleur personnalisée';
+  }
+
+  Color _chatColorValue(String hex) {
+    final String clean = hex.replaceFirst('#', '');
+    final int? parsed = int.tryParse('FF$clean', radix: 16);
+    return Color(parsed ?? 0xffc56cff);
+  }
+
+  Future<void> _showChatColorPopup() async {
+    final String? selected = await showDialog<String>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          backgroundColor: const Color(0xff21150e),
+          title: const Text(
+            'Couleur du chat',
+            style: TextStyle(color: Colors.amber),
+          ),
+          content: SizedBox(
+            width: 300,
+            child: Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              alignment: WrapAlignment.center,
+              children: _chatColors.map((Map<String, String> option) {
+                final String hex = option['hex'] ?? '#C56CFF';
+                final String name = option['name'] ?? '';
+                final bool active = hex == chatColor;
+                final Color color = _chatColorValue(hex);
+
+                return Tooltip(
+                  message: name,
+                  child: InkWell(
+                    customBorder: const CircleBorder(),
+                    onTap: () => Navigator.pop(dialogContext, hex),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 150),
+                      width: 48,
+                      height: 48,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: color,
+                        border: Border.all(
+                          color: active ? Colors.white : Colors.white24,
+                          width: active ? 3 : 1,
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: color.withValues(alpha: 0.28),
+                            blurRadius: 10,
+                          ),
+                        ],
+                      ),
+                      child: active
+                          ? const Icon(
+                              Icons.check_rounded,
+                              color: Colors.white,
+                            )
+                          : null,
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Annuler'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (selected == null || selected == chatColor || !mounted) {
+      return;
+    }
+
+    setState(() {
+      chatColor = selected;
+    });
+
+    final bool saved =
+        await ProfileStorage.saveChatColor(chatColor);
+
+    if (saved) {
+      await TavernProfileService.syncCurrentProfile();
+    }
+
+    if (!mounted) {
+      return;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        duration: const Duration(milliseconds: 1300),
+        content: Text(
+          saved
+              ? 'Couleur du Comptoir mise à jour.'
+              : 'Impossible d’enregistrer la couleur.',
+        ),
+      ),
     );
   }
 
@@ -636,6 +774,20 @@ class _ProfileScreenState
                     _getAvailabilitySubtitle(),
                 onTap:
                     _showAvailabilityPopup,
+              ),
+
+              const SizedBox(
+                height: 15,
+              ),
+
+              _ProfileOption(
+                icon: '🎨',
+                title:
+                    'COULEUR DU CHAT',
+                subtitle:
+                    _chatColorLabel(),
+                onTap:
+                    _showChatColorPopup,
               ),
 
               const SizedBox(
