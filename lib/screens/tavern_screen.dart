@@ -24,37 +24,47 @@ class TavernScreen extends StatefulWidget {
 class _TavernScreenState extends State<TavernScreen> {
 
   // ===========================================================================
-  // TAVERNE V5 — DÉCOR FIDÈLE + RESPONSIVE
+  // TAVERNE V8 — MAQUETTE VERROUILLÉE + UI DYNAMIQUE
   // ===========================================================================
   //
-  // Le décor est découpé en assets indépendants afin de garder la composition
-  // de la maquette tout en laissant les messages, avatars et contrôles 100 %
-  // interactifs. Chaque zone se redimensionne indépendamment pour éviter les
-  // débordements sur les petits téléphones et les écrans très larges.
+  // Le décor lourd est maintenant porté par des images dédiées : header,
+  // étagères du Comptoir, bois central, fond sobre des autres sections et
+  // cadre de saisie. Flutter ne redessine plus la taverne : il gère seulement
+  // ce qui doit vivre et bouger (présence, tabs, swipe, messages, profils,
+  // modération et saisie).
 
   static const String _tavernHeaderAsset =
-      'assets/images/tavern/tavern_header.png';
+      'assets/images/tavern/v8_header.jpg';
 
-  static const String _tavernTabPanelAsset =
-      'assets/images/tavern/tavern_tab_panel.png';
+  static const String _tavernTabSelectedAsset =
+      'assets/images/tavern/v8_tab_selected.png';
+
+  static const String _tavernTabIdleAsset =
+      'assets/images/tavern/v8_tab_idle.png';
 
   static const String _tavernShelfLeftAsset =
-      'assets/images/tavern/tavern_shelf_left.jpg';
+      'assets/images/tavern/v8_shelf_left.jpg';
 
   static const String _tavernShelfRightAsset =
-      'assets/images/tavern/tavern_shelf_right.jpg';
+      'assets/images/tavern/v8_shelf_right.jpg';
 
-  static const String _tavernWallAsset =
-      'assets/images/tavern/tavern_wall.jpg';
+  static const String _tavernCenterWoodAsset =
+      'assets/images/tavern/v8_center_wood.jpg';
 
-  static const String _tavernWoodStripAsset =
-      'assets/images/tavern/tavern_wood_strip.jpg';
+  static const String _tavernSimpleBackgroundAsset =
+      'assets/images/tavern/v8_simple_bg.jpg';
+
+  static const String _tavernComposerAsset =
+      'assets/images/tavern/v8_composer.jpg';
+
+  static const String _tavernTabsBackgroundAsset =
+      'assets/images/tavern/v8_tabs_bg.jpg';
+
+  static const String _tavernDiscussionStripAsset =
+      'assets/images/tavern/v8_discussion_strip.jpg';
 
   static const Color _tavernBackground =
       Color(0xff0d0806);
-
-  static const Color _tavernPanel =
-      Color(0xff17100c);
 
   static const Color _tavernGold =
       Color(0xffffca63);
@@ -62,17 +72,66 @@ class _TavernScreenState extends State<TavernScreen> {
   static const Color _tavernGoldDeep =
       Color(0xff9e642b);
 
-  static const Color _tavernPurple =
-      Color(0xffb15cff);
+  static const double _maxTavernWidth = 760;
 
-  static const double _maxTavernWidth =
-      760;
+  static const List<Map<String, String>> _tavernSections =
+      <Map<String, String>>[
+    <String, String>{
+      'slug': 'comptoir',
+      'label': 'Comptoir',
+      'icon': '🍺',
+      'title': 'DISCUSSION GÉNÉRALE',
+      'description': 'Le grand salon public de Project XP.',
+    },
+    <String, String>{
+      'slug': 'quetes',
+      'label': 'Quêtes & Aventures',
+      'icon': '⚔️',
+      'title': 'QUÊTES & AVENTURES',
+      'description': 'Quêtes communautaires et aventures à plusieurs.',
+    },
+    <String, String>{
+      'slug': 'marche',
+      'label': 'Marché',
+      'icon': '🛒',
+      'title': 'MARCHÉ',
+      'description': 'Échanges, annonces et trouvailles des aventuriers.',
+    },
+    <String, String>{
+      'slug': 'des_jeux',
+      'label': 'Dés & Jeux',
+      'icon': '🎲',
+      'title': 'DÉS & JEUX',
+      'description': 'Mini-jeux, défis et hasard entre aventuriers.',
+    },
+    <String, String>{
+      'slug': 'hauts_faits',
+      'label': 'Hauts Faits',
+      'icon': '🏆',
+      'title': 'HAUTS FAITS',
+      'description': 'Succès, exploits et progression de la communauté.',
+    },
+  ];
 
   final TextEditingController _messageController =
       TextEditingController();
 
   final ScrollController _messageScrollController =
       ScrollController();
+
+  final PageController _sectionPageController =
+      PageController();
+
+  final ScrollController _sectionTabScrollController =
+      ScrollController();
+
+  final List<GlobalKey> _sectionTabKeys =
+      List<GlobalKey>.generate(
+    _tavernSections.length,
+    (_) => GlobalKey(),
+  );
+
+  int _selectedSectionIndex = 0;
 
   bool _loadingChannels = true;
   bool _sendingMessage = false;
@@ -81,6 +140,7 @@ class _TavernScreenState extends State<TavernScreen> {
 
   bool _didPrecacheTavernAssets = false;
   int _lastAutoScrollItemCount = -1;
+  double _lastKeyboardInset = 0;
 
   String? _pendingMessageContent;
   String? _pendingMessageChannelId;
@@ -129,11 +189,15 @@ class _TavernScreenState extends State<TavernScreen> {
         const List<String> assets =
             <String>[
           _tavernHeaderAsset,
-          _tavernTabPanelAsset,
+          _tavernTabSelectedAsset,
+          _tavernTabIdleAsset,
           _tavernShelfLeftAsset,
           _tavernShelfRightAsset,
-          _tavernWallAsset,
-          _tavernWoodStripAsset,
+          _tavernCenterWoodAsset,
+          _tavernSimpleBackgroundAsset,
+          _tavernComposerAsset,
+          _tavernTabsBackgroundAsset,
+          _tavernDiscussionStripAsset,
         ];
 
         for (final String asset in assets) {
@@ -152,6 +216,8 @@ class _TavernScreenState extends State<TavernScreen> {
   void dispose() {
     _messageController.dispose();
     _messageScrollController.dispose();
+    _sectionPageController.dispose();
+    _sectionTabScrollController.dispose();
     super.dispose();
   }
 
@@ -542,76 +608,29 @@ class _TavernScreenState extends State<TavernScreen> {
         BuildContext context,
         BoxConstraints constraints,
       ) {
-        final double width =
-            constraints.maxWidth;
+        final double width = constraints.maxWidth;
+        final double screenHeight = MediaQuery.sizeOf(context).height;
+        final bool shortScreen = screenHeight < 690;
 
-        final double screenHeight =
-            MediaQuery.sizeOf(
-          context,
-        ).height;
+        // Proportion exacte du header de la maquette approuvée : 971 x 260.
+        final double height = (width * (260 / 971))
+            .clamp(shortScreen ? 94.0 : 100.0, shortScreen ? 108.0 : 118.0)
+            .toDouble();
 
-        final bool landscape =
-            MediaQuery.orientationOf(
-                  context,
-                ) ==
-                Orientation.landscape;
+        final double dpr = MediaQuery.devicePixelRatioOf(context);
+        final int cacheWidth = (width * dpr)
+            .round()
+            .clamp(420, 1180)
+            .toInt();
 
-        final double naturalHeight =
-            width *
-            (220 / 924);
+        final double backLeft = width * (25 / 971);
+        final double backTop = height * (135 / 260);
+        final double backWidth = width * (116 / 971);
+        final double backHeight = height * (92 / 260);
 
-        final double maxHeight =
-            landscape
-                ? 92
-                : screenHeight < 620
-                    ? 86
-                    : 132;
-
-        final double height =
-            naturalHeight
-                .clamp(
-                  78.0,
-                  maxHeight,
-                )
-                .toDouble();
-
-        final double edgeButtonSize =
-            (height * 0.48)
-                .clamp(
-                  36.0,
-                  46.0,
-                )
-                .toDouble();
-
-        final double phoneSlotWidth =
-            (edgeButtonSize + 8)
-                .clamp(
-                  44.0,
-                  56.0,
-                )
-                .toDouble();
-
-        final double presenceHeight =
-            (edgeButtonSize * 0.82)
-                .clamp(
-                  34.0,
-                  40.0,
-                )
-                .toDouble();
-
-        final double dpr =
-            MediaQuery.devicePixelRatioOf(
-          context,
-        );
-
-        final int headerCacheWidth =
-            (width * dpr)
-                .round()
-                .clamp(
-                  320,
-                  924,
-                )
-                .toInt();
+        // Le téléphone reste le GlobalCommunicatorAlert de Project XP.
+        // On lui réserve sa zone à droite, sans rien rasteriser dans Flutter.
+        final double phoneReserve = width < 330 ? 43.0 : 52.0;
 
         return SizedBox(
           height: height,
@@ -621,140 +640,63 @@ class _TavernScreenState extends State<TavernScreen> {
               Image.asset(
                 _tavernHeaderAsset,
                 fit: BoxFit.fill,
-                alignment:
-                    Alignment.center,
-                cacheWidth:
-                    headerCacheWidth,
-                filterQuality:
-                    FilterQuality.medium,
+                cacheWidth: cacheWidth,
+                filterQuality: FilterQuality.high,
                 gaplessPlayback: true,
               ),
-              const DecoratedBox(
-                decoration:
-                    BoxDecoration(
-                  gradient:
-                      LinearGradient(
-                    begin:
-                        Alignment.topCenter,
-                    end:
-                        Alignment.bottomCenter,
-                    colors: [
-                      Color(
-                        0x00000000,
-                      ),
-                      Color(
-                        0x08000000,
-                      ),
-                      Color(
-                        0x30080403,
-                      ),
-                    ],
-                  ),
-                ),
-              ),
               Positioned(
-                left:
-                    width < 340
-                        ? 6
-                        : 10,
-                top:
-                    (height -
-                            edgeButtonSize) /
-                        2,
-                child:
-                    _buildHeaderSquareButton(
-                  size:
-                      edgeButtonSize,
-                  tooltip:
-                      'Retour au Hall',
-                  icon:
-                      Icons
-                          .arrow_back_rounded,
-                  onPressed: () {
-                    Navigator.pop(
-                      context,
-                    );
-                  },
+                left: backLeft,
+                top: backTop,
+                width: backWidth,
+                height: backHeight,
+                child: _buildHeaderHitTarget(
+                  tooltip: 'Retour au Hall',
+                  onPressed: () => Navigator.pop(context),
                 ),
               ),
               if (_isProjectXpAdmin)
                 Positioned(
-                  left:
-                      (width < 340
-                              ? 6
-                              : 10) +
-                          edgeButtonSize +
-                          4,
-                  top:
-                      (height - 30) /
-                          2,
+                  left: backLeft + backWidth - 4,
+                  top: 3,
                   child: SizedBox(
-                    width: 30,
-                    height: 30,
-                    child:
-                        PopupMenuButton<String>(
-                      tooltip:
-                          'Administration Project XP',
-                      color:
-                          const Color(
-                        0xff21150e,
-                      ),
-                      enabled:
-                          !_resettingTavern,
-                      padding:
-                          EdgeInsets.zero,
-                      iconSize: 17,
-                      icon:
-                          _resettingTavern
-                              ? const SizedBox(
-                                  width:
-                                      15,
-                                  height:
-                                      15,
-                                  child:
-                                      CircularProgressIndicator(
-                                    strokeWidth:
-                                        2,
-                                    color:
-                                        _tavernGold,
-                                  ),
-                                )
-                              : const Icon(
-                                  Icons
-                                      .admin_panel_settings_outlined,
-                                  color:
-                                      _tavernGold,
-                                ),
-                      onSelected: (
-                        String value,
-                      ) {
-                        if (value ==
-                            'reset_tavern') {
+                    width: 28,
+                    height: 28,
+                    child: PopupMenuButton<String>(
+                      tooltip: 'Administration Project XP',
+                      color: const Color(0xff21150e),
+                      enabled: !_resettingTavern,
+                      padding: EdgeInsets.zero,
+                      iconSize: 16,
+                      icon: _resettingTavern
+                          ? const SizedBox(
+                              width: 14,
+                              height: 14,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: _tavernGold,
+                              ),
+                            )
+                          : const Icon(
+                              Icons.admin_panel_settings_outlined,
+                              color: _tavernGold,
+                            ),
+                      onSelected: (String value) {
+                        if (value == 'reset_tavern') {
                           _confirmResetTavern();
                         }
                       },
-                      itemBuilder: (
-                        BuildContext context,
-                      ) {
+                      itemBuilder: (BuildContext context) {
                         return const [
                           PopupMenuItem<String>(
-                            value:
-                                'reset_tavern',
+                            value: 'reset_tavern',
                             child: Row(
                               children: [
                                 Icon(
-                                  Icons
-                                      .delete_sweep_outlined,
-                                  color:
-                                      Colors.redAccent,
+                                  Icons.delete_sweep_outlined,
+                                  color: Colors.redAccent,
                                 ),
-                                SizedBox(
-                                  width:
-                                      10,
-                                ),
-                                Text(
-                                  'Réinitialiser le chat',
-                                ),
+                                SizedBox(width: 10),
+                                Text('Réinitialiser le chat'),
                               ],
                             ),
                           ),
@@ -763,28 +705,18 @@ class _TavernScreenState extends State<TavernScreen> {
                     ),
                   ),
                 ),
+              // La capsule grandit naturellement avec 1, 12, 128, 1000... 
+              // Elle est ancrée à droite juste avant le téléphone global.
               Positioned(
-                right:
-                    phoneSlotWidth + 6,
-                top:
-                    (height -
-                            presenceHeight) /
-                        2,
-                child:
-                    _buildPresencePill(
-                  height:
-                      presenceHeight,
-                ),
+                right: phoneReserve + 7,
+                top: height * 0.41,
+                child: _buildPresenceCount(),
               ),
-              // Le Communicateur global dessine le vrai téléphone dans ce slot.
               Positioned(
                 right: 0,
                 top: 0,
                 bottom: 0,
-                child: SizedBox(
-                  width:
-                      phoneSlotWidth,
-                ),
+                child: SizedBox(width: phoneReserve),
               ),
             ],
           ),
@@ -793,187 +725,105 @@ class _TavernScreenState extends State<TavernScreen> {
     );
   }
 
-
-  Widget _buildHeaderSquareButton({
-    required double size,
+  Widget _buildHeaderHitTarget({
     required String tooltip,
-    required IconData icon,
     required VoidCallback onPressed,
   }) {
     return Tooltip(
       message: tooltip,
       child: Material(
-        color: const Color(
-          0xe81b110b,
-        ),
-        borderRadius:
-            BorderRadius.circular(
-          12,
-        ),
+        color: Colors.transparent,
         child: InkWell(
-          borderRadius:
-              BorderRadius.circular(
-            12,
-          ),
+          customBorder: const CircleBorder(),
           onTap: onPressed,
-          child: Container(
-            width: size,
-            height: size,
-            decoration: BoxDecoration(
-              borderRadius:
-                  BorderRadius.circular(
-                12,
-              ),
-              border: Border.all(
-                color: const Color(
-                  0xff8c5a2d,
-                ),
-              ),
-              boxShadow: const [
-                BoxShadow(
-                  color:
-                      Color(
-                    0x66000000,
-                  ),
-                  blurRadius: 7,
-                  offset:
-                      Offset(
-                    0,
-                    3,
-                  ),
-                ),
-              ],
-            ),
-            child: Icon(
-              icon,
-              size:
-                  size * 0.54,
-              color:
-                  _tavernGold,
-            ),
-          ),
         ),
       ),
     );
   }
 
-  Widget _buildPresencePill({
-    double height = 40,
-  }) {
+  Widget _buildPresenceCount() {
     return StreamBuilder<int>(
-      stream: OnlinePresenceService
-          .instance
-          .onlineCountStream,
-      initialData:
-          OnlinePresenceService
-              .instance
-              .currentCount,
+      stream: OnlinePresenceService.instance.onlineCountStream,
+      initialData: OnlinePresenceService.instance.currentCount,
       builder: (
         BuildContext context,
         AsyncSnapshot<int> snapshot,
       ) {
-        final int count =
-            snapshot.data ?? 0;
+        final int count = snapshot.data ?? 0;
+        final bool compact = MediaQuery.sizeOf(context).width < 340;
 
-        return Container(
-          height: height,
-          padding:
-              EdgeInsets.symmetric(
-            horizontal:
-                height < 37
-                    ? 8
-                    : 10,
-          ),
-          decoration: BoxDecoration(
-            color:
-                const Color(
-              0xe61a110c,
+        return AnimatedSize(
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOutCubic,
+          alignment: Alignment.centerRight,
+          child: Container(
+            key: ValueKey<int>(count.toString().length),
+            height: compact ? 29 : 32,
+            padding: EdgeInsets.symmetric(
+              horizontal: compact ? 8 : 10,
             ),
-            borderRadius:
-                BorderRadius.circular(
-              13,
-            ),
-            border: Border.all(
-              color:
-                  const Color(
-                0xff76502d,
+            decoration: BoxDecoration(
+              color: const Color(0xf21a110c),
+              borderRadius: BorderRadius.circular(13),
+              border: Border.all(
+                color: const Color(0xffb57a37),
+                width: 1.0,
               ),
+              boxShadow: const [
+                BoxShadow(
+                  color: Color(0x77000000),
+                  blurRadius: 6,
+                  offset: Offset(0, 2),
+                ),
+              ],
             ),
-            boxShadow:
-                const [
-              BoxShadow(
-                color:
-                    Color(
-                  0x66000000,
-                ),
-                blurRadius: 6,
-                offset:
-                    Offset(
-                  0,
-                  2,
-                ),
-              ),
-            ],
-          ),
-          child: Row(
-            mainAxisSize:
-                MainAxisSize.min,
-            children: [
-              Container(
-                width:
-                    height < 37
-                        ? 7
-                        : 8,
-                height:
-                    height < 37
-                        ? 7
-                        : 8,
-                decoration:
-                    const BoxDecoration(
-                  color:
-                      Color(
-                    0xff42d66b,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: compact ? 7 : 8,
+                  height: compact ? 7 : 8,
+                  decoration: const BoxDecoration(
+                    color: Color(0xff38d66b),
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: Color(0x6638d66b),
+                        blurRadius: 5,
+                      ),
+                    ],
                   ),
-                  shape:
-                      BoxShape.circle,
                 ),
-              ),
-              const SizedBox(
-                width: 6,
-              ),
-              Icon(
-                Icons
-                    .people_alt_rounded,
-                color:
-                    Colors.white70,
-                size:
-                    height < 37
-                        ? 15
-                        : 17,
-              ),
-              const SizedBox(
-                width: 5,
-              ),
-              Text(
-                count.toString(),
-                style: TextStyle(
-                  color:
-                      Colors.white,
-                  fontSize:
-                      height < 37
-                          ? 11
-                          : 12,
-                  fontWeight:
-                      FontWeight.w800,
+                SizedBox(width: compact ? 5 : 6),
+                Icon(
+                  Icons.people_alt_rounded,
+                  size: compact ? 14 : 16,
+                  color: const Color(0xffdbc4a2),
                 ),
-              ),
-            ],
+                SizedBox(width: compact ? 4 : 5),
+                Text(
+                  count.toString(),
+                  maxLines: 1,
+                  style: TextStyle(
+                    color: const Color(0xffffd47a),
+                    fontSize: compact ? 13 : 14.5,
+                    fontWeight: FontWeight.w900,
+                    height: 1,
+                    shadows: const [
+                      Shadow(
+                        color: Color(0xaa000000),
+                        blurRadius: 3,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
         );
       },
     );
   }
-
 
   Widget _buildContent() {
     if (_loadingChannels) {
@@ -987,9 +837,7 @@ class _TavernScreenState extends State<TavernScreen> {
     if (_errorMessage != null) {
       return Center(
         child: Padding(
-          padding: const EdgeInsets.all(
-            24,
-          ),
+          padding: const EdgeInsets.all(24),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -998,28 +846,21 @@ class _TavernScreenState extends State<TavernScreen> {
                 size: 44,
                 color: Colors.orangeAccent,
               ),
-              const SizedBox(
-                height: 14,
-              ),
+              const SizedBox(height: 14),
               Text(
                 _errorMessage!,
                 textAlign: TextAlign.center,
               ),
-              const SizedBox(
-                height: 18,
-              ),
+              const SizedBox(height: 18),
               FilledButton(
                 onPressed: () {
                   setState(() {
                     _loadingChannels = true;
                     _errorMessage = null;
                   });
-
                   _loadChannels();
                 },
-                child: const Text(
-                  'Réessayer',
-                ),
+                child: const Text('Réessayer'),
               ),
             ],
           ),
@@ -1029,9 +870,7 @@ class _TavernScreenState extends State<TavernScreen> {
 
     if (_channels.isEmpty) {
       return const Center(
-        child: Text(
-          'Aucun channel disponible.',
-        ),
+        child: Text('Aucun channel disponible.'),
       );
     }
 
@@ -1041,8 +880,18 @@ class _TavernScreenState extends State<TavernScreen> {
         children: [
           _buildChannelSelector(),
           Expanded(
-            child:
-                _buildSelectedChannel(),
+            child: PageView.builder(
+              controller: _sectionPageController,
+              itemCount: _tavernSections.length,
+              physics: const PageScrollPhysics(),
+              onPageChanged: _handleSectionPageChanged,
+              itemBuilder: (
+                BuildContext context,
+                int index,
+              ) {
+                return _buildSectionPage(index);
+              },
+            ),
           ),
         ],
       ),
@@ -1055,412 +904,263 @@ class _TavernScreenState extends State<TavernScreen> {
         BuildContext context,
         BoxConstraints constraints,
       ) {
-        final double width =
-            constraints.maxWidth;
+        final double width = constraints.maxWidth;
+        final double selectorHeight = (width * 0.17)
+            .clamp(58.0, 72.0)
+            .toDouble();
+        // Environ 2,7 onglets visibles sur un téléphone standard : on comprend
+        // immédiatement que le bandeau se fait glisser, sans grands espaces.
+        final double itemWidth = (width * 0.355)
+            .clamp(118.0, 174.0)
+            .toDouble();
+        final double gap = width < 340 ? 2.0 : 3.0;
 
-        final bool threeChannelLayout =
-            _channels.length == 3 &&
-            width >= 340;
-
-        final double selectorHeight =
-            width < 340
-                ? 70
-                : 76;
-
-        final Widget tabs;
-
-        if (threeChannelLayout) {
-          tabs = Padding(
-            padding:
-                const EdgeInsets.symmetric(
-              horizontal: 7,
-            ),
-            child: Row(
-              children: [
-                Expanded(
-                  flex: 30,
-                  child:
-                      _buildChannelTab(
-                    channel:
-                        _channels[0],
-                    selected:
-                        _channels[0]['id'] ==
-                            _selectedChannel?['id'],
+        return SizedBox(
+          height: selectorHeight,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              Image.asset(
+                _tavernTabsBackgroundAsset,
+                fit: BoxFit.cover,
+                alignment: Alignment.center,
+                filterQuality: FilterQuality.medium,
+              ),
+              DecoratedBox(
+                decoration: BoxDecoration(
+                  color: const Color(0x3d090604),
+                  border: Border(
+                    bottom: BorderSide(
+                      color: _tavernGoldDeep.withValues(alpha: 0.62),
+                      width: 0.8,
+                    ),
                   ),
                 ),
-                const SizedBox(
-                  width: 6,
+              ),
+              ListView.separated(
+                controller: _sectionTabScrollController,
+                scrollDirection: Axis.horizontal,
+                physics: const BouncingScrollPhysics(),
+                padding: EdgeInsets.symmetric(
+                  horizontal: width < 340 ? 3 : 5,
+                  vertical: 4,
                 ),
-                Expanded(
-                  flex: 42,
-                  child:
-                      _buildChannelTab(
-                    channel:
-                        _channels[1],
-                    selected:
-                        _channels[1]['id'] ==
-                            _selectedChannel?['id'],
-                  ),
-                ),
-                const SizedBox(
-                  width: 6,
-                ),
-                Expanded(
-                  flex: 28,
-                  child:
-                      _buildChannelTab(
-                    channel:
-                        _channels[2],
-                    selected:
-                        _channels[2]['id'] ==
-                            _selectedChannel?['id'],
-                  ),
-                ),
-              ],
-            ),
-          );
-        } else {
-          final double itemWidth =
-              width < 300
-                  ? 138
-                  : width < 340
-                      ? 150
-                      : 184;
-
-          tabs = ListView.separated(
-            padding:
-                const EdgeInsets.symmetric(
-              horizontal: 7,
-            ),
-            scrollDirection:
-                Axis.horizontal,
-            itemCount:
-                _channels.length,
-            separatorBuilder: (
-              BuildContext context,
-              int index,
-            ) {
-              return const SizedBox(
-                width: 6,
-              );
-            },
-            itemBuilder: (
-              BuildContext context,
-              int index,
-            ) {
-              final Map<String, dynamic> channel =
-                  _channels[index];
-
-              return SizedBox(
-                width:
-                    itemWidth,
-                child:
-                    _buildChannelTab(
-                  channel:
-                      channel,
-                  selected:
-                      channel['id'] ==
-                          _selectedChannel?['id'],
-                ),
-              );
-            },
-          );
-        }
-
-        return Container(
-          height:
-              selectorHeight,
-          padding:
-              const EdgeInsets.symmetric(
-            vertical: 7,
+                itemCount: _tavernSections.length,
+                separatorBuilder: (_, _) => SizedBox(width: gap),
+                itemBuilder: (BuildContext context, int index) {
+                  return SizedBox(
+                    key: _sectionTabKeys[index],
+                    width: itemWidth,
+                    child: _buildChannelTab(index: index),
+                  );
+                },
+              ),
+            ],
           ),
-          decoration:
-              const BoxDecoration(
-            image:
-                DecorationImage(
-              image:
-                  AssetImage(
-                _tavernWoodStripAsset,
-              ),
-              fit:
-                  BoxFit.cover,
-            ),
-            color:
-                Color(
-              0xff160e09,
-            ),
-            border:
-                Border(
-              top:
-                  BorderSide(
-                color:
-                    Color(
-                  0xff5a371d,
-                ),
-              ),
-              bottom:
-                  BorderSide(
-                color:
-                    Color(
-                  0xff5a371d,
-                ),
-              ),
-            ),
-          ),
-          child: tabs,
         );
       },
     );
   }
-
 
   Widget _buildChannelTab({
-    required Map<String, dynamic> channel,
-    required bool selected,
+    required int index,
   }) {
-    final String icon =
-        channel['icon']
-                ?.toString() ??
-            '🍺';
+    final Map<String, String> section = _tavernSections[index];
+    final bool selected = index == _selectedSectionIndex;
+    final String label = section['label'] ?? '';
+    final String icon = section['icon'] ?? '';
 
-    final String name =
-        channel['name']
-                ?.toString() ??
-            'Channel';
-
-    return LayoutBuilder(
-      builder: (
-        BuildContext context,
-        BoxConstraints constraints,
-      ) {
-        final double width =
-            constraints.maxWidth;
-
-        final double iconSize =
-            (width * 0.17)
-                .clamp(
-                  18.0,
-                  25.0,
-                )
-                .toDouble();
-
-        final double fontSize =
-            (width * 0.092)
-                .clamp(
-                  10.5,
-                  14.0,
-                )
-                .toDouble();
-
-        return Material(
-          color:
-              Colors.transparent,
-          child: InkWell(
-            borderRadius:
-                BorderRadius.circular(
-              10,
-            ),
-            onTap: () {
-              _selectChannel(
-                channel,
-              );
-            },
-            child:
-                AnimatedContainer(
-              duration:
-                  const Duration(
-                milliseconds:
-                    180,
+    return AnimatedScale(
+      scale: selected ? 1.0 : 0.982,
+      duration: const Duration(milliseconds: 170),
+      curve: Curves.easeOut,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: () => _selectSectionFromTab(index),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              Image.asset(
+                selected ? _tavernTabSelectedAsset : _tavernTabIdleAsset,
+                fit: BoxFit.fill,
+                filterQuality: FilterQuality.high,
+                gaplessPlayback: true,
               ),
-              decoration:
-                  BoxDecoration(
-                image:
-                    const DecorationImage(
-                  image:
-                      AssetImage(
-                    _tavernTabPanelAsset,
-                  ),
-                  fit:
-                      BoxFit.cover,
-                  filterQuality:
-                      FilterQuality.medium,
+              Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 7,
+                  vertical: 5,
                 ),
-                borderRadius:
-                    BorderRadius.circular(
-                  10,
-                ),
-                border:
-                    Border.all(
-                  color:
-                      selected
-                          ? _tavernGold
-                          : const Color(
-                              0xff5b3a22,
-                            ),
-                  width:
-                      selected
-                          ? 1.6
-                          : 1,
-                ),
-                boxShadow: [
-                  if (selected)
-                    const BoxShadow(
-                      color:
-                          Color(
-                        0x40ffbd4a,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      icon,
+                      style: TextStyle(
+                        fontSize: label.length > 13 ? 16 : 18,
+                        height: 1,
                       ),
-                      blurRadius:
-                          7,
                     ),
-                ],
-              ),
-              child: Stack(
-                children: [
-                  const Positioned.fill(
-                    child:
-                        DecoratedBox(
-                      decoration:
-                          BoxDecoration(
-                        gradient:
-                            LinearGradient(
-                          begin:
-                              Alignment.topCenter,
-                          end:
-                              Alignment.bottomCenter,
-                          colors: [
-                            Color(
-                              0x05000000,
-                            ),
-                            Color(
-                              0x3d000000,
+                    const SizedBox(width: 5),
+                    Flexible(
+                      child: Text(
+                        label,
+                        maxLines: 2,
+                        textAlign: TextAlign.center,
+                        overflow: TextOverflow.fade,
+                        softWrap: true,
+                        style: TextStyle(
+                          color: selected
+                              ? const Color(0xffffd878)
+                              : const Color(0xffeee2d5),
+                          fontSize: label.length > 14 ? 9.8 : 10.8,
+                          height: 1.02,
+                          fontWeight: FontWeight.w800,
+                          shadows: const [
+                            Shadow(
+                              color: Color(0xcc000000),
+                              blurRadius: 3,
                             ),
                           ],
                         ),
                       ),
                     ),
-                  ),
-                  Center(
-                    child: Padding(
-                      padding:
-                          const EdgeInsets.symmetric(
-                        horizontal:
-                            7,
-                      ),
-                      child: FittedBox(
-                        fit:
-                            BoxFit.scaleDown,
-                        child: Row(
-                          mainAxisSize:
-                              MainAxisSize.min,
-                          children: [
-                            Text(
-                              icon,
-                              style:
-                                  TextStyle(
-                                fontSize:
-                                    iconSize,
-                              ),
-                            ),
-                            SizedBox(
-                              width:
-                                  width <
-                                          120
-                                      ? 4
-                                      : 7,
-                            ),
-                            Text(
-                              name,
-                              maxLines:
-                                  1,
-                              style:
-                                  TextStyle(
-                                color:
-                                    selected
-                                        ? _tavernGold
-                                        : const Color(
-                                            0xffded2c7,
-                                          ),
-                                fontSize:
-                                    fontSize,
-                                fontWeight:
-                                    FontWeight.w800,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                  if (selected)
-                    Positioned(
-                      left: 18,
-                      right: 18,
-                      bottom: 3,
-                      child:
-                          Container(
-                        height: 2.5,
-                        decoration:
-                            BoxDecoration(
-                          borderRadius:
-                              BorderRadius.circular(
-                            99,
-                          ),
-                          gradient:
-                              const LinearGradient(
-                            colors: [
-                              Color(
-                                0x00b15cff,
-                              ),
-                              _tavernPurple,
-                              Color(
-                                0x00b15cff,
-                              ),
-                            ],
-                          ),
-                          boxShadow:
-                              const [
-                            BoxShadow(
-                              color:
-                                  Color(
-                                0x88b15cff,
-                              ),
-                              blurRadius:
-                                  5,
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                ],
+                  ],
+                ),
               ),
-            ),
+            ],
           ),
-        );
-      },
+        ),
+      ),
     );
   }
 
-
-  Widget _buildSelectedChannel() {
-    final Map<String, dynamic>? channel =
-        _selectedChannel;
-
-    if (channel == null) {
-      return const SizedBox.shrink();
+  void _selectSectionFromTab(int index) {
+    if (index < 0 || index >= _tavernSections.length) {
+      return;
     }
 
-    final String slug =
-        channel['slug']?.toString() ?? '';
+    _activateSection(index);
 
-    if (slug == 'comptoir') {
-      return _buildComptoir(
-        channel,
+    if (_sectionPageController.hasClients) {
+      _sectionPageController.animateToPage(
+        index,
+        duration: const Duration(milliseconds: 280),
+        curve: Curves.easeOutCubic,
       );
     }
+  }
 
-    return _buildFutureChannel(
-      channel,
+  void _handleSectionPageChanged(int index) {
+    _activateSection(index);
+  }
+
+  void _activateSection(int index) {
+    if (index < 0 || index >= _tavernSections.length) {
+      return;
+    }
+
+    if (_selectedSectionIndex != index) {
+      setState(() {
+        _selectedSectionIndex = index;
+      });
+    }
+
+    final String slug = _tavernSections[index]['slug'] ?? '';
+    final Map<String, dynamic>? channel = _channelForSection(slug);
+    if (channel != null) {
+      _selectChannel(channel);
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _ensureSectionTabVisible(index);
+    });
+  }
+
+  void _ensureSectionTabVisible(int index) {
+    if (!mounted || index < 0 || index >= _sectionTabKeys.length) {
+      return;
+    }
+
+    final BuildContext? tabContext = _sectionTabKeys[index].currentContext;
+    if (tabContext == null) {
+      return;
+    }
+
+    Scrollable.ensureVisible(
+      tabContext,
+      duration: const Duration(milliseconds: 240),
+      curve: Curves.easeOutCubic,
+      alignment: 0.5,
     );
+  }
+
+  Map<String, dynamic>? _channelForSection(String slug) {
+    for (final Map<String, dynamic> channel in _channels) {
+      final String channelSlug =
+          channel['slug']?.toString().toLowerCase() ?? '';
+      final String channelName =
+          channel['name']?.toString().toLowerCase() ?? '';
+
+      if (slug == 'comptoir' && channelSlug == 'comptoir') {
+        return channel;
+      }
+      if (slug == 'quetes' &&
+          (channelSlug.contains('quete') ||
+              channelName.contains('quête') ||
+              channelName.contains('quete'))) {
+        return channel;
+      }
+      if (slug == 'marche' &&
+          (channelSlug.contains('marche') ||
+              channelName.contains('marché') ||
+              channelName.contains('marche'))) {
+        return channel;
+      }
+      if (slug == 'des_jeux' &&
+          (channelSlug.contains('des') ||
+              channelSlug.contains('jeu') ||
+              channelName.contains('dés') ||
+              channelName.contains('jeux'))) {
+        return channel;
+      }
+      if (slug == 'hauts_faits' &&
+          (channelSlug.contains('haut') ||
+              channelSlug.contains('fait') ||
+              channelName.contains('haut') ||
+              channelName.contains('fait'))) {
+        return channel;
+      }
+    }
+
+    return null;
+  }
+
+  Widget _buildSectionPage(int index) {
+    final Map<String, String> section = _tavernSections[index];
+    final String slug = section['slug'] ?? '';
+
+    if (slug == 'comptoir') {
+      final Map<String, dynamic>? comptoir = _channelForSection('comptoir');
+      if (comptoir == null) {
+        return const Center(
+          child: Text('Le Comptoir est indisponible.'),
+        );
+      }
+      return _buildComptoir(comptoir);
+    }
+
+    final Map<String, dynamic>? channel = _channelForSection(slug);
+    final Map<String, dynamic> displayChannel = channel ??
+        <String, dynamic>{
+          'icon': section['icon'] ?? '✦',
+          'name': section['title'] ?? section['label'] ?? '',
+          'description': section['description'] ?? '',
+        };
+
+    return _buildFutureChannel(displayChannel);
   }
 
   Widget _buildComptoir(
@@ -1479,6 +1179,18 @@ class _TavernScreenState extends State<TavernScreen> {
 
     final Stream<List<Map<String, dynamic>>>? messageStream =
         _messageStream;
+
+    final double keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
+    if ((keyboardInset - _lastKeyboardInset).abs() > 1) {
+      _lastKeyboardInset = keyboardInset;
+      if (keyboardInset > 0) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            _scrollToBottom();
+          }
+        });
+      }
+    }
 
     if (messageStream == null) {
       return const Center(
@@ -1586,110 +1298,42 @@ class _TavernScreenState extends State<TavernScreen> {
 
   Widget _buildDiscussionHeader() {
     return LayoutBuilder(
-      builder: (
-        BuildContext context,
-        BoxConstraints constraints,
-      ) {
-        final double width =
-            constraints.maxWidth;
+      builder: (BuildContext context, BoxConstraints constraints) {
+        final double width = constraints.maxWidth;
+        final double height = (width * (90 / 971))
+            .clamp(31.0, 39.0)
+            .toDouble();
 
-        final double height =
-            width < 340
-                ? 40
-                : 44;
-
-        final double fontSize =
-            width < 340
-                ? 11.5
-                : 13;
-
-        return Container(
+        return SizedBox(
           height: height,
-          decoration:
-              const BoxDecoration(
-            image:
-                DecorationImage(
-              image:
-                  AssetImage(
-                _tavernWallAsset,
-              ),
-              fit:
-                  BoxFit.cover,
-            ),
-            border:
-                Border(
-              bottom:
-                  BorderSide(
-                color:
-                    Color(
-                  0xff4e321d,
-                ),
-              ),
-            ),
-          ),
-          child: Row(
+          child: Stack(
+            fit: StackFit.expand,
             children: [
-              const Expanded(
-                child: Divider(
-                  indent: 16,
-                  endIndent: 10,
-                  color:
-                      Color(
-                    0xff68482c,
-                  ),
-                ),
+              Image.asset(
+                _tavernDiscussionStripAsset,
+                fit: BoxFit.fill,
+                filterQuality: FilterQuality.high,
+                gaplessPlayback: true,
               ),
-              Text(
-                'DISCUSSION GÉNÉRALE',
-                maxLines: 1,
-                style:
-                    TextStyle(
-                  color:
-                      const Color(
-                    0xffc999ef,
-                  ),
-                  fontSize:
-                      fontSize,
-                  fontWeight:
-                      FontWeight.w800,
-                  letterSpacing:
-                      0.45,
-                  shadows:
-                      const [
-                    Shadow(
-                      color:
-                          Color(
-                        0x66000000,
-                      ),
-                      blurRadius:
-                          3,
+              Center(
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 1),
+                  child: Text(
+                    'DISCUSSION GÉNÉRALE',
+                    maxLines: 1,
+                    style: TextStyle(
+                      color: const Color(0xffcda1ff),
+                      fontSize: width < 340 ? 10.5 : 12.2,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 0.28,
+                      shadows: const [
+                        Shadow(
+                          color: Color(0x88000000),
+                          blurRadius: 3,
+                          offset: Offset(0, 1),
+                        ),
+                      ],
                     ),
-                  ],
-                ),
-              ),
-              const Padding(
-                padding:
-                    EdgeInsets.symmetric(
-                  horizontal: 7,
-                ),
-                child: Text(
-                  '◆',
-                  style:
-                      TextStyle(
-                    color:
-                        _tavernGold,
-                    fontSize:
-                        7,
-                  ),
-                ),
-              ),
-              const Expanded(
-                child: Divider(
-                  indent: 4,
-                  endIndent: 16,
-                  color:
-                      Color(
-                    0xff68482c,
                   ),
                 ),
               ),
@@ -1699,7 +1343,6 @@ class _TavernScreenState extends State<TavernScreen> {
       },
     );
   }
-
 
   Widget _buildChatStage({
     required List<Map<String, dynamic>> messages,
@@ -1718,22 +1361,22 @@ class _TavernScreenState extends State<TavernScreen> {
             constraints.maxHeight;
 
         double shelfWidth =
-            (width * 0.105)
+            (width * 0.196)
                 .clamp(
-                  24.0,
-                  70.0,
+                  46.0,
+                  112.0,
                 )
                 .toDouble();
 
-        if (width < 290 ||
-            height < 260) {
+        if (width < 285 ||
+            height < 250) {
           shelfWidth = 0;
         } else if (width < 330) {
           shelfWidth =
-              shelfWidth
+              (width * 0.17)
                   .clamp(
-                    24.0,
-                    30.0,
+                    36.0,
+                    48.0,
                   )
                   .toDouble();
         }
@@ -1748,11 +1391,11 @@ class _TavernScreenState extends State<TavernScreen> {
                 ? 64
                 : (shelfWidth *
                         dpr *
-                        1.15)
+                        1.2)
                     .round()
                     .clamp(
-                      64,
-                      160,
+                      80,
+                      220,
                     )
                     .toInt();
 
@@ -1773,13 +1416,13 @@ class _TavernScreenState extends State<TavernScreen> {
             padding:
                 EdgeInsets.fromLTRB(
               width < 350
-                  ? 7
-                  : 11,
-              12,
+                  ? 8
+                  : 12,
+              10,
               width < 350
-                  ? 7
-                  : 11,
-              20,
+                  ? 8
+                  : 12,
+              26,
             ),
             itemCount:
                 messages.length +
@@ -1816,55 +1459,52 @@ class _TavernScreenState extends State<TavernScreen> {
         }
 
         return Stack(
-          fit: StackFit.expand,
+          fit:
+              StackFit.expand,
           children: [
-            Container(
-              decoration:
-                  const BoxDecoration(
-                color:
-                    _tavernPanel,
-                image:
-                    DecorationImage(
-                  image:
-                      AssetImage(
-                    _tavernWallAsset,
-                  ),
-                  fit:
-                      BoxFit.cover,
-                  repeat:
-                      ImageRepeat.repeatY,
-                ),
+            Positioned.fill(
+              child: Image.asset(
+                _tavernCenterWoodAsset,
+                fit:
+                    BoxFit.cover,
+                alignment:
+                    Alignment.topCenter,
+                filterQuality:
+                    FilterQuality.medium,
               ),
             ),
-            const DecoratedBox(
-              decoration:
-                  BoxDecoration(
-                gradient:
-                    LinearGradient(
-                  begin:
-                      Alignment.topCenter,
-                  end:
-                      Alignment.bottomCenter,
-                  colors: [
-                    Color(
-                      0x50000000,
-                    ),
-                    Color(
-                      0x78090503,
-                    ),
-                    Color(
-                      0x61090503,
-                    ),
-                    Color(
-                      0x79090503,
-                    ),
-                  ],
-                  stops: [
-                    0,
-                    0.22,
-                    0.76,
-                    1,
-                  ],
+            const Positioned.fill(
+              child:
+                  DecoratedBox(
+                decoration:
+                    BoxDecoration(
+                  gradient:
+                      LinearGradient(
+                    begin:
+                        Alignment.topCenter,
+                    end:
+                        Alignment.bottomCenter,
+                    colors: [
+                      Color(
+                        0x26080504,
+                      ),
+                      Color(
+                        0x480a0705,
+                      ),
+                      Color(
+                        0x520a0705,
+                      ),
+                      Color(
+                        0x30080504,
+                      ),
+                    ],
+                    stops: [
+                      0,
+                      0.22,
+                      0.78,
+                      1,
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -1876,45 +1516,28 @@ class _TavernScreenState extends State<TavernScreen> {
                   SizedBox(
                     width:
                         shelfWidth,
-                    child: Image.asset(
+                    child:
+                        Image.asset(
                       _tavernShelfLeftAsset,
                       fit:
-                          BoxFit.fill,
+                          BoxFit.cover,
                       alignment:
                           Alignment.topCenter,
                       cacheWidth:
                           shelfCacheWidth,
                       filterQuality:
-                          FilterQuality.medium,
+                          FilterQuality.high,
                       gaplessPlayback:
                           true,
                     ),
                   ),
                 Expanded(
-                  child:
-                      DecoratedBox(
+                  child: Container(
                     decoration:
                         BoxDecoration(
-                      gradient:
-                          const LinearGradient(
-                        begin:
-                            Alignment.topCenter,
-                        end:
-                            Alignment.bottomCenter,
-                        colors: [
-                          Color(
-                            0x7f0c0806,
-                          ),
-                          Color(
-                            0xb30c0806,
-                          ),
-                          Color(
-                            0xa60c0806,
-                          ),
-                          Color(
-                            0xc40c0806,
-                          ),
-                        ],
+                      color:
+                          const Color(
+                        0x4d0a0705,
                       ),
                       border:
                           Border(
@@ -1924,7 +1547,7 @@ class _TavernScreenState extends State<TavernScreen> {
                               Colors.black
                                   .withValues(
                             alpha:
-                                0.28,
+                                0.26,
                           ),
                         ),
                         right:
@@ -1933,28 +1556,30 @@ class _TavernScreenState extends State<TavernScreen> {
                               Colors.black
                                   .withValues(
                             alpha:
-                                0.28,
+                                0.26,
                           ),
                         ),
                       ),
                     ),
-                    child: center,
+                    child:
+                        center,
                   ),
                 ),
                 if (shelfWidth > 0)
                   SizedBox(
                     width:
                         shelfWidth,
-                    child: Image.asset(
+                    child:
+                        Image.asset(
                       _tavernShelfRightAsset,
                       fit:
-                          BoxFit.fill,
+                          BoxFit.cover,
                       alignment:
                           Alignment.topCenter,
                       cacheWidth:
                           shelfCacheWidth,
                       filterQuality:
-                          FilterQuality.medium,
+                          FilterQuality.high,
                       gaplessPlayback:
                           true,
                     ),
@@ -1981,21 +1606,21 @@ class _TavernScreenState extends State<TavernScreen> {
             constraints.maxHeight;
 
         final bool compact =
-            width < 250 ||
-            height < 420;
+            width < 230 ||
+            height < 390;
 
         final double maxCardWidth =
-            (width * 0.84)
+            (width * 0.72)
                 .clamp(
-                  190.0,
-                  300.0,
+                  170.0,
+                  250.0,
                 )
                 .toDouble();
 
         final double beerSize =
             compact
-                ? 47
-                : 54;
+                ? 42
+                : 48;
 
         return Center(
           child:
@@ -2004,12 +1629,12 @@ class _TavernScreenState extends State<TavernScreen> {
                 EdgeInsets.symmetric(
               horizontal:
                   compact
-                      ? 8
-                      : 14,
+                      ? 6
+                      : 10,
               vertical:
                   compact
-                      ? 10
-                      : 16,
+                      ? 8
+                      : 12,
             ),
             child:
                 ConstrainedBox(
@@ -2022,50 +1647,48 @@ class _TavernScreenState extends State<TavernScreen> {
                 padding:
                     EdgeInsets.fromLTRB(
                   compact
-                      ? 14
-                      : 18,
+                      ? 12
+                      : 15,
                   compact
-                      ? 14
-                      : 18,
+                      ? 12
+                      : 15,
                   compact
-                      ? 14
-                      : 18,
+                      ? 12
+                      : 15,
                   compact
-                      ? 14
-                      : 16,
+                      ? 11
+                      : 14,
                 ),
                 decoration:
                     BoxDecoration(
                   color:
                       const Color(
-                    0xd624150e,
+                    0xc824150e,
                   ),
                   borderRadius:
                       BorderRadius.circular(
-                    16,
+                    15,
                   ),
                   border:
                       Border.all(
                     color:
                         const Color(
-                      0xff7a4d29,
+                      0xff714625,
                     ),
-                    width:
-                        1,
                   ),
                   boxShadow:
                       const [
                     BoxShadow(
                       color:
                           Color(
-                        0x50000000,
+                        0x99000000,
                       ),
                       blurRadius:
-                          14,
+                          18,
                       offset:
                           Offset(
                         0,
-                        6,
+                        8,
                       ),
                     ),
                   ],
@@ -2076,9 +1699,9 @@ class _TavernScreenState extends State<TavernScreen> {
                   children: [
                     Container(
                       width:
-                          beerSize,
+                          beerSize + 18,
                       height:
-                          beerSize,
+                          beerSize + 18,
                       alignment:
                           Alignment.center,
                       decoration:
@@ -2087,12 +1710,14 @@ class _TavernScreenState extends State<TavernScreen> {
                             BoxShape.circle,
                         color:
                             const Color(
-                          0xff1d120c,
+                          0x40150c08,
                         ),
                         border:
                             Border.all(
                           color:
-                              _tavernGoldDeep,
+                              const Color(
+                            0xffa66e32,
+                          ),
                         ),
                       ),
                       child: Text(
@@ -2100,16 +1725,14 @@ class _TavernScreenState extends State<TavernScreen> {
                         style:
                             TextStyle(
                           fontSize:
-                              compact
-                                  ? 27
-                                  : 31,
+                              beerSize,
                         ),
                       ),
                     ),
                     SizedBox(
                       height:
                           compact
-                              ? 11
+                              ? 10
                               : 13,
                     ),
                     Text(
@@ -2127,14 +1750,11 @@ class _TavernScreenState extends State<TavernScreen> {
                         fontWeight:
                             FontWeight.w800,
                         height:
-                            1.22,
+                            1.18,
                       ),
                     ),
-                    SizedBox(
-                      height:
-                          compact
-                              ? 6
-                              : 8,
+                    const SizedBox(
+                      height: 7,
                     ),
                     Text(
                       'Sois le premier aventurier à parler.',
@@ -2143,35 +1763,28 @@ class _TavernScreenState extends State<TavernScreen> {
                       style:
                           TextStyle(
                         color:
-                            Colors.white
-                                .withValues(
-                          alpha:
-                              0.60,
-                        ),
+                            Colors.white60,
                         fontSize:
                             compact
-                                ? 11.5
-                                : 13,
+                                ? 11
+                                : 12,
                         height:
-                            1.32,
+                            1.35,
                       ),
                     ),
-                    SizedBox(
-                      height:
-                          compact
-                              ? 10
-                              : 13,
+                    const SizedBox(
+                      height: 11,
                     ),
                     Row(
                       children: [
                         Expanded(
                           child:
-                              Container(
-                            height:
-                                1,
+                              Divider(
                             color:
-                                const Color(
-                              0xff5d3b22,
+                                _tavernGold
+                                    .withValues(
+                              alpha:
+                                  0.25,
                             ),
                           ),
                         ),
@@ -2181,36 +1794,32 @@ class _TavernScreenState extends State<TavernScreen> {
                             horizontal:
                                 8,
                           ),
-                          child:
-                              Text(
+                          child: Text(
                             '✦',
                             style:
                                 TextStyle(
                               color:
                                   _tavernGold,
                               fontSize:
-                                  10,
+                                  11,
                             ),
                           ),
                         ),
                         Expanded(
                           child:
-                              Container(
-                            height:
-                                1,
+                              Divider(
                             color:
-                                const Color(
-                              0xff5d3b22,
+                                _tavernGold
+                                    .withValues(
+                              alpha:
+                                  0.25,
                             ),
                           ),
                         ),
                       ],
                     ),
-                    SizedBox(
-                      height:
-                          compact
-                              ? 8
-                              : 10,
+                    const SizedBox(
+                      height: 8,
                     ),
                     Text(
                       'Ici, chacun a une histoire à partager.',
@@ -2220,16 +1829,12 @@ class _TavernScreenState extends State<TavernScreen> {
                           TextStyle(
                         color:
                             const Color(
-                              0xffd09b67,
-                            )
-                                .withValues(
-                          alpha:
-                              0.76,
+                          0xffc99a6f,
                         ),
                         fontSize:
                             compact
-                                ? 10.5
-                                : 11.5,
+                                ? 10
+                                : 11,
                         fontStyle:
                             FontStyle.italic,
                       ),
@@ -2244,98 +1849,6 @@ class _TavernScreenState extends State<TavernScreen> {
     );
   }
 
-
-  Widget _buildChannelTitle(
-    Map<String, dynamic> channel,
-  ) {
-    final String icon =
-        channel['icon']?.toString() ??
-            '';
-
-    final String name =
-        channel['name']?.toString() ??
-            '';
-
-    final String description =
-        channel['description']
-                ?.toString() ??
-            '';
-
-    return Container(
-      width: double.infinity,
-      padding:
-          const EdgeInsets.symmetric(
-        horizontal: 18,
-        vertical: 14,
-      ),
-      decoration:
-          const BoxDecoration(
-        image: DecorationImage(
-          image: AssetImage(
-            _tavernWallAsset,
-          ),
-          fit: BoxFit.cover,
-        ),
-        border: Border(
-          bottom: BorderSide(
-            color:
-                Color(
-              0xff4b301c,
-            ),
-          ),
-        ),
-      ),
-      child: Row(
-        children: [
-          Text(
-            icon,
-            style:
-                const TextStyle(
-              fontSize: 27,
-            ),
-          ),
-          const SizedBox(
-            width: 11,
-          ),
-          Expanded(
-            child: Column(
-              crossAxisAlignment:
-                  CrossAxisAlignment.start,
-              children: [
-                Text(
-                  name,
-                  style:
-                      const TextStyle(
-                    color:
-                        _tavernGold,
-                    fontSize: 17,
-                    fontWeight:
-                        FontWeight.bold,
-                  ),
-                ),
-                if (description
-                    .trim()
-                    .isNotEmpty) ...[
-                  const SizedBox(
-                    height: 2,
-                  ),
-                  Text(
-                    description,
-                    style:
-                        const TextStyle(
-                      color:
-                          Colors.white54,
-                      fontSize: 12,
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
 
   Widget _buildPendingMessage(
     String content,
@@ -2568,247 +2081,131 @@ class _TavernScreenState extends State<TavernScreen> {
   Widget _buildMessage(
     Map<String, dynamic> message,
   ) {
-    final String authorId =
-        message['author_id']
-                ?.toString() ??
-            '';
-
+    final String authorId = message['author_id']?.toString() ?? '';
     final Map<String, dynamic>? profile =
-        _asStringDynamicMap(
-      message[
-          'author_profile'],
-    );
-
+        _asStringDynamicMap(message['author_profile']);
     final String displayName =
-        profile?['display_name']
-                ?.toString()
-                .trim() ??
-            '';
-
-    final String authorName =
-        displayName.isNotEmpty
-            ? displayName
-            : _fallbackAuthorName(
-                authorId,
-              );
-
-    final String content =
-        message['content']
-                ?.toString() ??
-            '';
-
-    final String createdAt =
-        _formatMessageTime(
-      message['created_at']
-          ?.toString(),
+        profile?['display_name']?.toString().trim() ?? '';
+    final String authorName = displayName.isNotEmpty
+        ? displayName
+        : _fallbackAuthorName(authorId);
+    final String content = message['content']?.toString() ?? '';
+    final String createdAt = _formatMessageTime(
+      message['created_at']?.toString(),
     );
-
-    final Color accent =
-        _authorAccent(
-      authorId,
-    );
+    final Color accent = _messageAccent(profile, authorId);
+    final Color bubbleColor = Color.lerp(
+          const Color(0xee17100c),
+          accent,
+          0.065,
+        ) ??
+        const Color(0xee17100c);
 
     return LayoutBuilder(
-      builder: (
-        BuildContext context,
-        BoxConstraints constraints,
-      ) {
-        final double width =
-            constraints.maxWidth;
-
-        final double avatarSize =
-            (width * 0.135)
-                .clamp(
-                  34.0,
-                  46.0,
-                )
-                .toDouble();
-
-        final bool compact =
-            width < 245;
+      builder: (BuildContext context, BoxConstraints constraints) {
+        final double width = constraints.maxWidth;
+        final bool compact = width < 245;
+        final double avatarSize = (width * 0.145)
+            .clamp(36.0, 50.0)
+            .toDouble();
 
         return Align(
-          alignment:
-              Alignment.centerLeft,
+          alignment: Alignment.centerLeft,
           child: ConstrainedBox(
-            constraints:
-                const BoxConstraints(
-              maxWidth: 560,
-            ),
+            constraints: const BoxConstraints(maxWidth: 560),
             child: Row(
-              crossAxisAlignment:
-                  CrossAxisAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 GestureDetector(
-                  behavior:
-                      HitTestBehavior.opaque,
+                  behavior: HitTestBehavior.opaque,
                   onTap: () {
                     _openPlayerCard(
-                      authorId:
-                          authorId,
-                      profile:
-                          profile,
+                      authorId: authorId,
+                      profile: profile,
                     );
                   },
-                  child:
-                      _buildAuthorAvatar(
-                    profile:
-                        profile,
-                    authorId:
-                        authorId,
-                    displayName:
-                        authorName,
-                    size:
-                        avatarSize,
-                    accent:
-                        accent,
+                  child: _buildAuthorAvatar(
+                    profile: profile,
+                    authorId: authorId,
+                    displayName: authorName,
+                    size: avatarSize,
+                    accent: accent,
                   ),
                 ),
-                SizedBox(
-                  width:
-                      compact
-                          ? 6
-                          : 8,
-                ),
+                SizedBox(width: compact ? 6 : 8),
                 Flexible(
                   child: Container(
-                    padding:
-                        EdgeInsets.fromLTRB(
-                      compact
-                          ? 8
-                          : 11,
-                      compact
-                          ? 7
-                          : 9,
-                      compact
-                          ? 8
-                          : 11,
-                      compact
-                          ? 7
-                          : 9,
+                    padding: EdgeInsets.fromLTRB(
+                      compact ? 9 : 12,
+                      compact ? 7 : 9,
+                      compact ? 9 : 12,
+                      compact ? 8 : 10,
                     ),
-                    decoration:
-                        BoxDecoration(
-                      color:
-                          const Color(
-                        0xdc17100d,
+                    decoration: BoxDecoration(
+                      color: bubbleColor,
+                      borderRadius: BorderRadius.circular(compact ? 12 : 14),
+                      border: Border.all(
+                        color: accent.withValues(alpha: 0.64),
+                        width: 0.9,
                       ),
-                      borderRadius:
-                          BorderRadius.circular(
-                        13,
-                      ),
-                      border:
-                          Border.all(
-                        color:
-                            accent
-                                .withValues(
-                          alpha:
-                              0.42,
+                      boxShadow: [
+                        const BoxShadow(
+                          color: Color(0x52000000),
+                          blurRadius: 8,
+                          offset: Offset(0, 3),
                         ),
-                      ),
-                      boxShadow:
-                          const [
                         BoxShadow(
-                          color:
-                              Color(
-                            0x3d000000,
-                          ),
-                          blurRadius:
-                              7,
-                          offset:
-                              Offset(
-                            0,
-                            3,
-                          ),
+                          color: accent.withValues(alpha: 0.08),
+                          blurRadius: 10,
                         ),
                       ],
                     ),
                     child: Column(
-                      crossAxisAlignment:
-                          CrossAxisAlignment.start,
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Row(
-                          mainAxisSize:
-                              MainAxisSize.min,
                           children: [
-                            Flexible(
-                              child:
-                                  GestureDetector(
-                                behavior:
-                                    HitTestBehavior.opaque,
-                                onTap:
-                                    () {
+                            Expanded(
+                              child: GestureDetector(
+                                behavior: HitTestBehavior.opaque,
+                                onTap: () {
                                   _openPlayerCard(
-                                    authorId:
-                                        authorId,
-                                    profile:
-                                        profile,
+                                    authorId: authorId,
+                                    profile: profile,
                                   );
                                 },
-                                child:
-                                    Text(
+                                child: Text(
                                   authorName,
-                                  maxLines:
-                                      1,
-                                  overflow:
-                                      TextOverflow.ellipsis,
-                                  style:
-                                      TextStyle(
-                                    color:
-                                        accent,
-                                    fontWeight:
-                                        FontWeight.w800,
-                                    fontSize:
-                                        compact
-                                            ? 11.5
-                                            : 13,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    color: accent,
+                                    fontWeight: FontWeight.w800,
+                                    fontSize: compact ? 11.5 : 13,
                                   ),
                                 ),
                               ),
                             ),
-                            if (createdAt
-                                .isNotEmpty) ...[
-                              const SizedBox(
-                                width:
-                                    7,
-                              ),
+                            if (createdAt.isNotEmpty) ...[
+                              const SizedBox(width: 8),
                               Text(
                                 createdAt,
-                                style:
-                                    TextStyle(
-                                  color:
-                                      Colors.white
-                                          .withValues(
-                                    alpha:
-                                        0.40,
-                                  ),
-                                  fontSize:
-                                      compact
-                                          ? 9
-                                          : 10,
+                                style: TextStyle(
+                                  color: const Color(0xffd7cbbf)
+                                      .withValues(alpha: 0.56),
+                                  fontSize: compact ? 8.8 : 9.8,
                                 ),
                               ),
                             ],
                           ],
                         ),
-                        const SizedBox(
-                          height:
-                              4,
-                        ),
+                        const SizedBox(height: 4),
                         Text(
                           content,
-                          style:
-                              TextStyle(
-                            color:
-                                const Color(
-                              0xfff4eee9,
-                            ),
-                            fontSize:
-                                compact
-                                    ? 12.5
-                                    : 13.5,
-                            height:
-                                1.32,
+                          style: TextStyle(
+                            color: const Color(0xfff5eee6),
+                            fontSize: compact ? 12.5 : 13.5,
+                            height: 1.34,
                           ),
                         ),
                       ],
@@ -2822,7 +2219,6 @@ class _TavernScreenState extends State<TavernScreen> {
       },
     );
   }
-
 
   Widget _buildAuthorAvatar({
     required Map<String, dynamic>? profile,
@@ -2992,6 +2388,80 @@ class _TavernScreenState extends State<TavernScreen> {
         ),
       ),
     );
+  }
+
+  Color _messageAccent(
+    Map<String, dynamic>? profile,
+    String authorId,
+  ) {
+    const List<String> directKeys = <String>[
+      'message_color',
+      'chat_color',
+      'accent_color',
+      'profile_color',
+      'color',
+    ];
+
+    if (profile != null) {
+      for (final String key in directKeys) {
+        final Color? parsed = _parseProfileColor(profile[key]);
+        if (parsed != null) {
+          return parsed;
+        }
+      }
+
+      for (final String nestedKey in <String>[
+        'preferences',
+        'settings',
+        'metadata',
+        'public_profile_data',
+      ]) {
+        final Map<String, dynamic>? nested =
+            _asStringDynamicMap(profile[nestedKey]);
+        if (nested == null) {
+          continue;
+        }
+        for (final String key in directKeys) {
+          final Color? parsed = _parseProfileColor(nested[key]);
+          if (parsed != null) {
+            return parsed;
+          }
+        }
+      }
+    }
+
+    return _authorAccent(authorId);
+  }
+
+  Color? _parseProfileColor(dynamic raw) {
+    if (raw == null) {
+      return null;
+    }
+
+    if (raw is int) {
+      final int value = raw <= 0xFFFFFF ? (0xFF000000 | raw) : raw;
+      return Color(value);
+    }
+
+    String value = raw.toString().trim();
+    if (value.isEmpty) {
+      return null;
+    }
+
+    value = value
+        .replaceFirst('#', '')
+        .replaceFirst(RegExp(r'^0x', caseSensitive: false), '');
+
+    if (value.length == 6) {
+      value = 'FF$value';
+    }
+
+    if (value.length != 8) {
+      return null;
+    }
+
+    final int? parsed = int.tryParse(value, radix: 16);
+    return parsed == null ? null : Color(parsed);
   }
 
   Color _authorAccent(
@@ -3919,320 +3389,139 @@ class _TavernScreenState extends State<TavernScreen> {
         BuildContext context,
         BoxConstraints constraints,
       ) {
-        final double width =
-            constraints.maxWidth;
+        final double width = constraints.maxWidth;
+        final double height = (width * (159 / 971))
+            .clamp(54.0, 68.0)
+            .toDouble();
 
-        final bool showPlus =
-            width >= 326;
+        final double plusLeft = width * (25 / 971);
+        final double plusWidth = width * (125 / 971);
+        final double fieldLeft = width * (150 / 971);
+        final double fieldRight = width * (286 / 971);
+        final double emojiLeft = width * (700 / 971);
+        final double emojiWidth = width * (105 / 971);
+        final double sendLeft = width * (810 / 971);
+        final double sendWidth = width * (135 / 971);
 
-        final bool showEmoji =
-            width >= 290;
-
-        final double buttonSize =
-            (width * 0.12)
-                .clamp(
-                  40.0,
-                  50.0,
-                )
-                .toDouble();
-
-        final double horizontalPadding =
-            width < 340
-                ? 6
-                : 9;
-
-        return Container(
-          padding:
-              EdgeInsets.fromLTRB(
-            horizontalPadding,
-            7,
-            horizontalPadding,
-            9,
-          ),
-          decoration:
-              const BoxDecoration(
-            image:
-                DecorationImage(
-              image:
-                  AssetImage(
-                _tavernWoodStripAsset,
-              ),
-              fit:
-                  BoxFit.cover,
-            ),
-            border:
-                Border(
-              top:
-                  BorderSide(
-                color:
-                    Color(
-                  0xff6d4525,
-                ),
-              ),
-            ),
-            boxShadow: [
-              BoxShadow(
-                color:
-                    Color(
-                  0x88000000,
-                ),
-                blurRadius:
-                    12,
-                offset:
-                    Offset(
-                  0,
-                  -3,
-                ),
-              ),
-            ],
-          ),
-          child: Row(
-            crossAxisAlignment:
-                CrossAxisAlignment.end,
+        return SizedBox(
+          height: height,
+          child: Stack(
+            fit: StackFit.expand,
             children: [
-              if (showPlus) ...[
-                _buildComposerButton(
-                  size:
-                      buttonSize,
-                  icon:
-                      Icons.add_rounded,
-                  foreground:
-                      _tavernGold,
-                  onPressed: () {
-                    ScaffoldMessenger.of(
-                      context,
-                    ).showSnackBar(
-                      const SnackBar(
-                        duration:
-                            Duration(
-                          milliseconds:
-                              1100,
-                        ),
-                        content:
-                            Text(
-                          'Les pièces jointes arriveront bientôt.',
-                        ),
-                      ),
-                    );
+              Image.asset(
+                _tavernComposerAsset,
+                fit: BoxFit.fill,
+                filterQuality: FilterQuality.high,
+                gaplessPlayback: true,
+              ),
+              Positioned(
+                left: fieldLeft,
+                right: fieldRight,
+                top: height * 0.28,
+                bottom: height * 0.23,
+                child: TextField(
+                  controller: _messageController,
+                  minLines: 1,
+                  maxLines: 2,
+                  maxLength: 2000,
+                  textCapitalization: TextCapitalization.sentences,
+                  textInputAction: TextInputAction.send,
+                  scrollPadding: const EdgeInsets.only(bottom: 110),
+                  style: TextStyle(
+                    color: const Color(0xfff3ece4),
+                    fontSize: width < 330 ? 12.5 : 13.5,
+                    height: 1.1,
+                  ),
+                  decoration: const InputDecoration(
+                    isDense: true,
+                    counterText: '',
+                    hintText: 'Écrire un message...',
+                    hintStyle: TextStyle(color: Colors.white38),
+                    border: InputBorder.none,
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                  onTap: () {
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      _scrollToBottom();
+                    });
                   },
+                  onSubmitted: (_) => _sendMessage(),
                 ),
-                const SizedBox(
-                  width: 6,
-                ),
-              ],
-              Expanded(
-                child:
-                    Container(
-                  constraints:
-                      const BoxConstraints(
-                    minHeight:
-                        44,
-                  ),
-                  decoration:
-                      BoxDecoration(
-                    color:
-                        const Color(
-                      0xe9150f0b,
-                    ),
-                    borderRadius:
-                        BorderRadius.circular(
-                      14,
-                    ),
-                    border:
-                        Border.all(
-                      color:
-                          const Color(
-                        0xff75502d,
-                      ),
-                    ),
-                    boxShadow:
-                        const [
-                      BoxShadow(
-                        color:
-                            Color(
-                          0x4a000000,
-                        ),
-                        blurRadius:
-                            7,
-                      ),
-                    ],
-                  ),
-                  child:
-                      TextField(
-                    controller:
-                        _messageController,
-                    minLines: 1,
-                    maxLines:
-                        width < 330
-                            ? 3
-                            : 4,
-                    maxLength:
-                        2000,
-                    textCapitalization:
-                        TextCapitalization
-                            .sentences,
-                    textInputAction:
-                        TextInputAction
-                            .send,
-                    scrollPadding:
-                        const EdgeInsets.only(
-                      bottom:
-                          130,
-                    ),
-                    style:
-                        TextStyle(
-                      color:
-                          const Color(
-                        0xfff5eee8,
-                      ),
-                      fontSize:
-                          width < 330
-                              ? 13
-                              : 14,
-                    ),
-                    cursorColor:
-                        _tavernGold,
-                    decoration:
-                        InputDecoration(
-                      counterText:
-                          '',
-                      hintText:
-                          'Parler au Comptoir...',
-                      hintStyle:
-                          const TextStyle(
-                        color:
-                            Colors.white38,
-                      ),
-                      border:
-                          InputBorder.none,
-                      contentPadding:
-                          EdgeInsets.symmetric(
-                        horizontal:
-                            width < 330
-                                ? 11
-                                : 13,
-                        vertical:
-                            11,
-                      ),
-                    ),
+              ),
+              Positioned(
+                left: plusLeft,
+                top: 0,
+                bottom: 0,
+                width: plusWidth,
+                child: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
                     onTap: () {
-                      WidgetsBinding
-                          .instance
-                          .addPostFrameCallback(
-                        (_) {
-                          _scrollToBottom();
-                        },
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          duration: Duration(milliseconds: 1100),
+                          content: Text(
+                            'Les pièces jointes arriveront bientôt.',
+                          ),
+                        ),
                       );
                     },
-                    onSubmitted:
-                        (_) {
-                      _sendMessage();
+                  ),
+                ),
+              ),
+              Positioned(
+                left: emojiLeft,
+                top: 0,
+                bottom: 0,
+                width: emojiWidth,
+                child: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    customBorder: const CircleBorder(),
+                    onTap: () {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          duration: Duration(milliseconds: 900),
+                          content: Text('Les réactions arrivent bientôt.'),
+                        ),
+                      );
                     },
+                    child: const Center(
+                      child: Icon(
+                        Icons.sentiment_satisfied_alt_rounded,
+                        color: Color(0xffffc75d),
+                        size: 24,
+                      ),
+                    ),
                   ),
                 ),
               ),
-              if (showEmoji) ...[
-                const SizedBox(
-                  width: 6,
-                ),
-                _buildComposerButton(
-                  size:
-                      buttonSize,
-                  icon:
-                      Icons
-                          .sentiment_satisfied_alt_rounded,
-                  foreground:
-                      _tavernGold,
-                  onPressed: () {
-                    ScaffoldMessenger.of(
-                      context,
-                    ).showSnackBar(
-                      const SnackBar(
-                        duration:
-                            Duration(
-                          milliseconds:
-                              1100,
-                        ),
-                        content:
-                            Text(
-                          'Le sélecteur d’emojis arrivera bientôt.',
-                        ),
-                      ),
-                    );
-                  },
-                ),
-              ],
-              const SizedBox(
-                width: 6,
-              ),
-              SizedBox(
-                width:
-                    buttonSize,
-                height:
-                    buttonSize,
-                child:
-                    FilledButton(
-                  style:
-                      FilledButton.styleFrom(
-                    padding:
-                        EdgeInsets.zero,
-                    backgroundColor:
-                        const Color(
-                      0xff6b3c88,
-                    ),
-                    disabledBackgroundColor:
-                        const Color(
-                      0xff3e2c42,
-                    ),
-                    foregroundColor:
-                        _tavernGold,
-                    shape:
-                        RoundedRectangleBorder(
-                      borderRadius:
-                          BorderRadius.circular(
-                        13,
-                      ),
-                      side:
-                          const BorderSide(
-                        color:
-                            Color(
-                          0xffd4a548,
-                        ),
-                        width:
-                            1.4,
-                      ),
-                    ),
-                    elevation:
-                        2,
-                  ),
-                  onPressed:
-                      _sendingMessage
-                          ? null
-                          : _sendMessage,
-                  child:
-                      _sendingMessage
-                          ? SizedBox(
-                              width:
-                                  buttonSize *
-                                      0.38,
-                              height:
-                                  buttonSize *
-                                      0.38,
-                              child:
-                                  const CircularProgressIndicator(
-                                strokeWidth:
-                                    2,
-                                color:
-                                    _tavernGold,
+              Positioned(
+                left: sendLeft,
+                top: 0,
+                bottom: 0,
+                width: sendWidth,
+                child: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: _sendingMessage ? null : _sendMessage,
+                    child: Center(
+                      child: _sendingMessage
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
                               ),
                             )
-                          : Icon(
-                              Icons
-                                  .send_rounded,
-                              size:
-                                  buttonSize *
-                                      0.50,
+                          : const Icon(
+                              Icons.send_rounded,
+                              color: Color(0xffffcf72),
+                              size: 26,
                             ),
+                    ),
+                  ),
                 ),
               ),
             ],
@@ -4242,51 +3531,7 @@ class _TavernScreenState extends State<TavernScreen> {
     );
   }
 
-
-  Widget _buildComposerButton({
-    required double size,
-    required IconData icon,
-    required Color foreground,
-    required VoidCallback onPressed,
-  }) {
-    return SizedBox(
-      width: size,
-      height: size,
-      child: OutlinedButton(
-        onPressed: onPressed,
-        style:
-            OutlinedButton.styleFrom(
-          padding: EdgeInsets.zero,
-          foregroundColor:
-              foreground,
-          backgroundColor:
-              const Color(
-            0xe31c120d,
-          ),
-          side:
-              const BorderSide(
-            color:
-                Color(
-              0xff76502d,
-            ),
-          ),
-          shape:
-              BeveledRectangleBorder(
-            borderRadius:
-                BorderRadius.circular(
-              9,
-            ),
-          ),
-        ),
-        child: Icon(
-          icon,
-          size: 24,
-        ),
-      ),
-    );
-  }
-
-  Widget _buildFutureChannel(
+  Widget _buildChannelTitle(
     Map<String, dynamic> channel,
   ) {
     final String icon =
@@ -4298,65 +3543,175 @@ class _TavernScreenState extends State<TavernScreen> {
     final String description =
         channel['description']?.toString() ?? '';
 
-    return Column(
-      children: [
-        _buildChannelTitle(
-          channel,
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(
+        horizontal: 18,
+        vertical: 10,
+      ),
+      decoration: const BoxDecoration(
+        color: Color(
+          0xff17100c,
         ),
-        Expanded(
-          child: Center(
-            child: Padding(
-              padding: const EdgeInsets.all(
-                28,
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    icon,
-                    style: const TextStyle(
-                      fontSize: 55,
+        border: Border(
+          bottom: BorderSide(
+            color: Color(
+              0xff4b301c,
+            ),
+          ),
+        ),
+      ),
+      child: Row(
+        children: [
+          Text(
+            icon,
+            style: const TextStyle(
+              fontSize: 25,
+            ),
+          ),
+          const SizedBox(
+            width: 10,
+          ),
+          Expanded(
+            child: Column(
+              crossAxisAlignment:
+                  CrossAxisAlignment.start,
+              children: [
+                Text(
+                  name,
+                  maxLines: 1,
+                  overflow:
+                      TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Color(
+                      0xffffd27a,
                     ),
+                    fontSize: 16,
+                    fontWeight:
+                        FontWeight.bold,
                   ),
+                ),
+                if (description.isNotEmpty) ...[
                   const SizedBox(
-                    height: 13,
-                  ),
-                  Text(
-                    name,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      color: Color(
-                        0xffffd27a,
-                      ),
-                      fontSize: 21,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(
-                    height: 6,
+                    height: 2,
                   ),
                   Text(
                     description,
-                    textAlign: TextAlign.center,
+                    maxLines: 1,
+                    overflow:
+                        TextOverflow.ellipsis,
                     style: const TextStyle(
-                      color: Colors.white60,
-                    ),
-                  ),
-                  const SizedBox(
-                    height: 14,
-                  ),
-                  const Text(
-                    'Cette partie de la Taverne ouvrira bientôt.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: Colors.white38,
-                      fontSize: 12,
+                      color: Colors.white54,
+                      fontSize: 11,
                     ),
                   ),
                 ],
-              ),
+              ],
             ),
           ),
+        ],
+      ),
+    );
+  }
+
+
+  Widget _buildFutureChannel(
+    Map<String, dynamic> channel,
+  ) {
+    final String icon = channel['icon']?.toString() ?? '✦';
+    final String name = channel['name']?.toString() ?? '';
+    final String description = channel['description']?.toString() ?? '';
+
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        Image.asset(
+          _tavernSimpleBackgroundAsset,
+          fit: BoxFit.cover,
+          alignment: Alignment.center,
+          filterQuality: FilterQuality.medium,
+          gaplessPlayback: true,
+        ),
+        const DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                Color(0x450b0705),
+                Color(0x8a0b0705),
+                Color(0xa60b0705),
+              ],
+            ),
+          ),
+        ),
+        Column(
+          children: [
+            _buildChannelTitle(channel),
+            Expanded(
+              child: Center(
+                child: Container(
+                  constraints: const BoxConstraints(maxWidth: 330),
+                  margin: const EdgeInsets.all(24),
+                  padding: const EdgeInsets.fromLTRB(24, 24, 24, 22),
+                  decoration: BoxDecoration(
+                    color: const Color(0xd91b110c),
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(
+                      color: const Color(0xff7f5329),
+                    ),
+                    boxShadow: const [
+                      BoxShadow(
+                        color: Color(0x88000000),
+                        blurRadius: 16,
+                        offset: Offset(0, 8),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        icon,
+                        style: const TextStyle(fontSize: 50),
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        name,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: Color(0xffffd27a),
+                          fontSize: 20,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      if (description.isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        Text(
+                          description,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            color: Colors.white60,
+                            height: 1.35,
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 16),
+                      const Text(
+                        'Contenu à venir…',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: Color(0xffc58aff),
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
         ),
       ],
     );
