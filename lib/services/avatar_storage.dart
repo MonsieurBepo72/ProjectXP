@@ -4,23 +4,41 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/avatar_model.dart';
 import 'auth_service.dart';
+import 'cloud_data_service.dart';
 import 'supabase_service.dart';
 
 class AvatarStorage {
   static const String _prefix =
       'project_xp_avatar_';
 
-  static String _key(
-    String userId,
-  ) {
-    return '$_prefix$userId';
-  }
+  static String _key(String userId) =>
+      '$_prefix$userId';
 
   // ===========================================================================
   // SAUVEGARDE
+  //
+  // Local d'abord, Cloud ensuite. Le réseau ne peut donc jamais faire perdre
+  // un avatar qui vient d'être validé sur l'appareil.
   // ===========================================================================
 
   static Future<bool> saveAvatar(
+    AvatarModel avatar,
+  ) async {
+    final bool localSaved =
+        await _saveLocalAvatar(avatar);
+
+    if (!localSaved) {
+      return false;
+    }
+
+    await CloudDataService.savePrivateAvatar(
+      avatar,
+    );
+
+    return true;
+  }
+
+  static Future<bool> _saveLocalAvatar(
     AvatarModel avatar,
   ) async {
     final SharedPreferences prefs =
@@ -28,9 +46,7 @@ class AvatarStorage {
 
     return prefs.setString(
       _key(avatar.userId),
-      jsonEncode(
-        avatar.toJson(),
-      ),
+      jsonEncode(avatar.toJson()),
     );
   }
 
@@ -41,64 +57,113 @@ class AvatarStorage {
   static Future<AvatarModel?> loadAvatar(
     String userId,
   ) async {
-    final String cleanUserId =
-        userId.trim();
+    final String cleanUserId = userId.trim();
 
     if (cleanUserId.isEmpty) {
       return null;
     }
 
-    final SharedPreferences prefs =
-        await SharedPreferences.getInstance();
+    final AvatarModel? localAvatar =
+        await _loadLocalAvatar(cleanUserId);
 
-    final String? raw =
-        prefs.getString(
-      _key(cleanUserId),
-    );
+    final String currentLocalUserId =
+        (await AuthService.getCurrentUserId())
+                ?.trim() ??
+            '';
 
-    if (raw != null &&
-        raw.isNotEmpty) {
-      try {
-        final dynamic decoded =
-            jsonDecode(raw);
+    // Pour le compte actif, le Cloud privé devient la source commune entre
+    // appareils. On conserve updatedAt afin de récupérer aussi une éventuelle
+    // modification faite hors-ligne avant le retour du réseau.
+    if (currentLocalUserId.isNotEmpty &&
+        cleanUserId == currentLocalUserId &&
+        CloudDataService.permanentUser != null) {
+      final CloudReadResult<AvatarModel> cloud =
+          await CloudDataService.loadPrivateAvatar(
+        localUserId: cleanUserId,
+      );
 
-        if (decoded is Map) {
-          AvatarModel avatar =
-              AvatarModel.fromJson(
-            Map<String, dynamic>.from(
-              decoded,
-            ),
-          );
-
-          // Sécurité : la clé du compte est la source de vérité.
-          if (avatar.userId != cleanUserId) {
-            avatar = avatar.copyWith(
-              userId: cleanUserId,
-            );
-
-            await saveAvatar(
-              avatar,
+      if (cloud.available) {
+        if (!cloud.found || cloud.value == null) {
+          if (localAvatar != null) {
+            await CloudDataService.savePrivateAvatar(
+              localAvatar,
             );
           }
 
-          return avatar;
+          return localAvatar;
         }
-      } catch (_) {
-        // Si l'avatar local est illisible, on tente le profil public online.
+
+        final AvatarModel cloudAvatar =
+            cloud.value!;
+
+        if (localAvatar != null &&
+            localAvatar.updatedAt.isAfter(
+              cloudAvatar.updatedAt,
+            )) {
+          await CloudDataService.savePrivateAvatar(
+            localAvatar,
+          );
+          return localAvatar;
+        }
+
+        await _saveLocalAvatar(
+          cloudAvatar,
+        );
+        return cloudAvatar;
       }
     }
 
-    // Les membres d'une Compagnie arrivés depuis un autre téléphone sont
-    // identifiés par leur UUID Supabase. Ils n'ont naturellement aucun avatar
-    // dans les SharedPreferences locales : on lit alors leur avatar public.
+    if (localAvatar != null) {
+      return localAvatar;
+    }
+
+    // Les profils distants continuent d'utiliser leur représentation publique
+    // Taverne. Le stockage privé Cloud n'est jamais exposé à un autre joueur.
     if (!_looksLikeUuid(cleanUserId) ||
         SupabaseService.currentUser == null) {
       return null;
     }
 
-    return _loadPublicAvatar(
-      cleanUserId,
-    );
+    return _loadPublicAvatar(cleanUserId);
+  }
+
+  static Future<AvatarModel?> _loadLocalAvatar(
+    String userId,
+  ) async {
+    final SharedPreferences prefs =
+        await SharedPreferences.getInstance();
+
+    final String? raw =
+        prefs.getString(_key(userId));
+
+    if (raw == null || raw.isEmpty) {
+      return null;
+    }
+
+    try {
+      final dynamic decoded = jsonDecode(raw);
+
+      if (decoded is! Map) {
+        return null;
+      }
+
+      AvatarModel avatar =
+          AvatarModel.fromJson(
+        Map<String, dynamic>.from(decoded),
+      );
+
+      if (avatar.userId != userId) {
+        avatar = avatar.copyWith(
+          userId: userId,
+          updatedAt: avatar.updatedAt,
+        );
+        await _saveLocalAvatar(avatar);
+      }
+
+      return avatar;
+    } catch (_) {
+      return null;
+    }
   }
 
   static Future<AvatarModel?> _loadPublicAvatar(
@@ -111,10 +176,7 @@ class AvatarStorage {
               .select(
                 'avatar_url, avatar_data',
               )
-              .eq(
-                'id',
-                userId,
-              )
+              .eq('id', userId)
               .maybeSingle();
 
       if (profile == null) {
@@ -138,8 +200,7 @@ class AvatarStorage {
                   .trim() ??
               '';
 
-      final DateTime now =
-          DateTime.now();
+      final DateTime now = DateTime.now();
 
       if (creationMode == 'photo') {
         final String avatarUrl =
@@ -156,8 +217,7 @@ class AvatarStorage {
           userId: userId,
           creationMode:
               AvatarCreationMode.photo,
-          generatedImagePath:
-              avatarUrl,
+          generatedImagePath: avatarUrl,
           createdAt: now,
           updatedAt: now,
         );
@@ -197,18 +257,14 @@ class AvatarStorage {
   static Future<bool> hasAvatar(
     String userId,
   ) async {
-    return await loadAvatar(
-          userId,
-        ) !=
-        null;
+    return await loadAvatar(userId) != null;
   }
 
   // ===========================================================================
   // COMPTE ACTIF
   // ===========================================================================
 
-  static Future<AvatarModel?>
-      loadCurrentAvatar() async {
+  static Future<AvatarModel?> loadCurrentAvatar() async {
     final String? userId =
         await AuthService.getCurrentUserId();
 
@@ -216,13 +272,10 @@ class AvatarStorage {
       return null;
     }
 
-    return loadAvatar(
-      userId,
-    );
+    return loadAvatar(userId);
   }
 
-  static Future<bool>
-      hasCurrentAvatar() async {
+  static Future<bool> hasCurrentAvatar() async {
     final String? userId =
         await AuthService.getCurrentUserId();
 
@@ -230,34 +283,28 @@ class AvatarStorage {
       return false;
     }
 
-    return hasAvatar(
-      userId,
-    );
+    return hasAvatar(userId);
+  }
+
+  static Future<void> syncCurrentAvatarWithCloud() async {
+    await loadCurrentAvatar();
   }
 
   // ===========================================================================
   // INVENTAIRE
   // ===========================================================================
 
-  static Future<List<String>>
-      getStoredAvatarUserIds() async {
+  static Future<List<String>> getStoredAvatarUserIds() async {
     final SharedPreferences prefs =
         await SharedPreferences.getInstance();
 
     return prefs
         .getKeys()
-        .where(
-          (key) =>
-              key.startsWith(_prefix),
-        )
+        .where((key) => key.startsWith(_prefix))
         .map(
-          (key) => key.substring(
-            _prefix.length,
-          ),
+          (key) => key.substring(_prefix.length),
         )
-        .where(
-          (id) => id.isNotEmpty,
-        )
+        .where((id) => id.isNotEmpty)
         .toList();
   }
 }

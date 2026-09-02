@@ -183,15 +183,15 @@ async function syncAchievements(body: JsonRecord, apiKey: string) {
     )
   }
 
-  const url = new URL(
+  const playerUrl = new URL(
     'https://api.steampowered.com/ISteamUserStats/GetPlayerAchievements/v1/',
   )
-  url.searchParams.set('key', apiKey)
-  url.searchParams.set('steamid', steamId)
-  url.searchParams.set('appid', appId)
-  url.searchParams.set('l', 'french')
+  playerUrl.searchParams.set('key', apiKey)
+  playerUrl.searchParams.set('steamid', steamId)
+  playerUrl.searchParams.set('appid', appId)
+  playerUrl.searchParams.set('l', 'french')
 
-  const raw = await steamJson(url)
+  const raw = await steamJson(playerUrl)
   const playerstats =
     raw && typeof raw === 'object'
       ? (raw as JsonRecord).playerstats
@@ -203,29 +203,159 @@ async function syncAchievements(body: JsonRecord, apiKey: string) {
 
   const stats = playerstats as JsonRecord
   if (stats.success === false) {
+    const steamError = String(stats.error ?? '').trim()
+    const normalizedError = steamError.toLowerCase()
+
+    // Steam renvoie parfois success=false pour un jeu qui ne possède tout
+    // simplement aucun système de succès/statistiques. Ce n'est pas une
+    // erreur fonctionnelle pour Project XP : on marque explicitement le
+    // catalogue comme vide afin de ne jamais afficher une fausse barre à 0 %.
+    const noAchievementSupport =
+      normalizedError.includes('no stats') ||
+      normalizedError.includes('does not have stats') ||
+      normalizedError.includes('no achievements')
+
+    if (noAchievementSupport) {
+      return jsonResponse({
+        ok: true,
+        steamId,
+        appId,
+        gameName: '',
+        unlocked: 0,
+        total: 0,
+        achievements: [],
+        noAchievements: true,
+      })
+    }
+
     return jsonResponse({
       ok: false,
-      error: String(
-        stats.error ??
-          'Les succès de ce jeu sont privés ou ce jeu n’utilise pas les succès Steam.',
-      ),
+      error:
+        steamError ||
+        'Les succès de ce jeu sont privés ou indisponibles sur Steam.',
     })
   }
 
-  const achievements = Array.isArray(stats.achievements)
+  const playerAchievements = Array.isArray(stats.achievements)
     ? stats.achievements
     : []
 
+  // Le schéma ajoute notamment les icônes et les descriptions localisées.
+  // Si Steam refuse ce second appel, la synchro reste utilisable avec les
+  // informations de GetPlayerAchievements.
+  const schemaById = new Map<string, JsonRecord>()
+
+  try {
+    const schemaUrl = new URL(
+      'https://api.steampowered.com/ISteamUserStats/GetSchemaForGame/v2/',
+    )
+    schemaUrl.searchParams.set('key', apiKey)
+    schemaUrl.searchParams.set('appid', appId)
+    schemaUrl.searchParams.set('l', 'french')
+
+    const schemaRaw = await steamJson(schemaUrl)
+    const game =
+      schemaRaw && typeof schemaRaw === 'object'
+        ? (schemaRaw as JsonRecord).game
+        : null
+    const availableGameStats =
+      game && typeof game === 'object'
+        ? (game as JsonRecord).availableGameStats
+        : null
+    const schemaAchievements =
+      availableGameStats && typeof availableGameStats === 'object'
+        ? (availableGameStats as JsonRecord).achievements
+        : null
+
+    if (Array.isArray(schemaAchievements)) {
+      for (const item of schemaAchievements) {
+        if (!item || typeof item !== 'object') {
+          continue
+        }
+        const row = item as JsonRecord
+        const id = String(row.name ?? '').trim()
+        if (id) {
+          schemaById.set(id, row)
+        }
+      }
+    }
+  } catch (_) {
+    // Fallback volontaire : les noms et états joueur restent exploitables.
+  }
+
+  const achievements: JsonRecord[] = []
   let unlocked = 0
-  for (const item of achievements) {
-    if (
-      item &&
-      typeof item === 'object' &&
-      Number((item as JsonRecord).achieved ?? 0) === 1
-    ) {
+
+  for (const item of playerAchievements) {
+    if (!item || typeof item !== 'object') {
+      continue
+    }
+
+    const player = item as JsonRecord
+    const id = String(player.apiname ?? '').trim()
+    if (!id) {
+      continue
+    }
+
+    const schema = schemaById.get(id)
+    const isUnlocked = Number(player.achieved ?? 0) === 1
+    const unlockTime = Number(player.unlocktime ?? 0)
+
+    if (isUnlocked) {
       unlocked += 1
     }
+
+    achievements.push({
+      id,
+      name: String(
+        player.name ??
+          schema?.displayName ??
+          id,
+      ),
+      description: String(
+        player.description ??
+          schema?.description ??
+          '',
+      ),
+      iconUrl: String(
+        schema?.icon ??
+          schema?.icongray ??
+          '',
+      ),
+      hidden: Number(schema?.hidden ?? 0) === 1,
+      platformUnlocked: isUnlocked,
+      platformUnlockedAt:
+        isUnlocked && unlockTime > 0
+          ? new Date(unlockTime * 1000).toISOString()
+          : null,
+    })
   }
+
+  // Certains jeux peuvent exposer leur schéma alors que le profil joueur
+  // renvoie une liste partielle. On complète la liste avec les succès absents.
+  for (const [id, schema] of schemaById.entries()) {
+    if (achievements.some((item) => item.id === id)) {
+      continue
+    }
+
+    achievements.push({
+      id,
+      name: String(schema.displayName ?? id),
+      description: String(schema.description ?? ''),
+      iconUrl: String(schema.icongray ?? schema.icon ?? ''),
+      hidden: Number(schema.hidden ?? 0) === 1,
+      platformUnlocked: false,
+      platformUnlockedAt: null,
+    })
+  }
+
+  achievements.sort((a, b) =>
+    String(a.name ?? '').localeCompare(
+      String(b.name ?? ''),
+      'fr',
+      { sensitivity: 'base' },
+    ),
+  )
 
   return jsonResponse({
     ok: true,
@@ -234,8 +364,10 @@ async function syncAchievements(body: JsonRecord, apiKey: string) {
     gameName: String(stats.gameName ?? ''),
     unlocked,
     total: achievements.length,
+    achievements,
   })
 }
+
 
 serve(async (request) => {
   if (request.method === 'OPTIONS') {

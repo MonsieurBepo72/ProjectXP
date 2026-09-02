@@ -4,6 +4,58 @@ import '../models/game_library_entry.dart';
 import '../services/game_catalog_service.dart';
 import '../services/game_library_service.dart';
 import '../services/steam_sync_service.dart';
+import '../widgets/game_cover_image.dart';
+import 'gaming_accounts_screen.dart';
+
+enum _LibrarySort {
+  recent,
+  titleAZ,
+  titleZA,
+  progressHigh,
+  progressLow,
+  playtimeHigh,
+  playtimeLow,
+}
+
+extension _LibrarySortX on _LibrarySort {
+  String get label {
+    switch (this) {
+      case _LibrarySort.recent:
+        return 'Activité récente';
+      case _LibrarySort.titleAZ:
+        return 'Nom A → Z';
+      case _LibrarySort.titleZA:
+        return 'Nom Z → A';
+      case _LibrarySort.progressHigh:
+        return 'Progression ↓';
+      case _LibrarySort.progressLow:
+        return 'Progression ↑';
+      case _LibrarySort.playtimeHigh:
+        return 'Temps de jeu ↓';
+      case _LibrarySort.playtimeLow:
+        return 'Temps de jeu ↑';
+    }
+  }
+}
+
+enum _AchievementFilter {
+  all,
+  unlocked,
+  locked,
+}
+
+extension _AchievementFilterX on _AchievementFilter {
+  String get label {
+    switch (this) {
+      case _AchievementFilter.all:
+        return 'TOUS';
+      case _AchievementFilter.unlocked:
+        return 'OBTENUS';
+      case _AchievementFilter.locked:
+        return 'À OBTENIR';
+    }
+  }
+}
 
 class GameLibraryScreen extends StatefulWidget {
   const GameLibraryScreen({super.key});
@@ -16,10 +68,15 @@ class GameLibraryScreen extends StatefulWidget {
 class _GameLibraryScreenState extends State<GameLibraryScreen> {
   bool _loading = true;
   bool _steamBusy = false;
+  String? _steamProgressLabel;
   bool _catalogBusy = false;
   List<GameLibraryEntry> _games = <GameLibraryEntry>[];
   GameStatus? _statusFilter;
   bool _favoriteOnly = false;
+  _LibrarySort _sort = _LibrarySort.recent;
+  final TextEditingController _searchController =
+      TextEditingController();
+  String _searchQuery = '';
 
   @override
   void initState() {
@@ -27,9 +84,15 @@ class _GameLibraryScreenState extends State<GameLibraryScreen> {
     _load();
   }
 
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
   Future<void> _load() async {
     final List<GameLibraryEntry> games =
-        await GameLibraryService.loadCurrentLibrary();
+        await GameLibraryService.loadCurrentLibraryConsolidated();
     if (!mounted) {
       return;
     }
@@ -40,16 +103,84 @@ class _GameLibraryScreenState extends State<GameLibraryScreen> {
   }
 
   List<GameLibraryEntry> get _visibleGames {
+    Iterable<GameLibraryEntry> filtered = _games;
+
     if (_favoriteOnly) {
-      return _games.where((game) => game.favorite).toList();
+      filtered = filtered.where((game) => game.favorite);
+    } else if (_statusFilter != null) {
+      filtered = filtered.where(
+        (game) => game.status == _statusFilter,
+      );
     }
 
-    final GameStatus? filter = _statusFilter;
-    if (filter == null) {
-      return _games;
+    final String query = _searchQuery.trim().toLowerCase();
+    if (query.isNotEmpty) {
+      filtered = filtered.where(
+        (game) =>
+            game.title.toLowerCase().contains(query) ||
+            game.platformSummaryText.toLowerCase().contains(query),
+      );
     }
-    return _games.where((game) => game.status == filter).toList();
+
+    final List<GameLibraryEntry> result =
+        filtered.toList();
+
+    switch (_sort) {
+      case _LibrarySort.recent:
+        result.sort(
+          (a, b) => b.updatedAt.compareTo(a.updatedAt),
+        );
+        break;
+      case _LibrarySort.titleAZ:
+        result.sort(
+          (a, b) => a.title.toLowerCase().compareTo(
+                b.title.toLowerCase(),
+              ),
+        );
+        break;
+      case _LibrarySort.titleZA:
+        result.sort(
+          (a, b) => b.title.toLowerCase().compareTo(
+                a.title.toLowerCase(),
+              ),
+        );
+        break;
+      case _LibrarySort.progressHigh:
+        result.sort(
+          (a, b) => (b.bestCompletionPercent ?? -1)
+              .compareTo(a.bestCompletionPercent ?? -1),
+        );
+        break;
+      case _LibrarySort.progressLow:
+        result.sort(
+          (a, b) => (a.bestCompletionPercent ?? 101)
+              .compareTo(b.bestCompletionPercent ?? 101),
+        );
+        break;
+      case _LibrarySort.playtimeHigh:
+        result.sort(
+          (a, b) =>
+              b.totalPlaytimeMinutes.compareTo(a.totalPlaytimeMinutes),
+        );
+        break;
+      case _LibrarySort.playtimeLow:
+        result.sort(
+          (a, b) =>
+              a.totalPlaytimeMinutes.compareTo(b.totalPlaytimeMinutes),
+        );
+        break;
+    }
+
+    return result;
   }
+
+  Future<void> _toggleFavorite(
+    GameLibraryEntry game,
+  ) async {
+    await GameLibraryService.toggleFavorite(game);
+    await _load();
+  }
+
 
   Future<void> _addGame() async {
     final _NewGameInput? input = await showDialog<_NewGameInput>(
@@ -126,41 +257,94 @@ class _GameLibraryScreenState extends State<GameLibraryScreen> {
     }
   }
 
-  Future<void> _connectSteam() async {
+  Future<void> _syncAllSteam() async {
     if (_steamBusy) {
       return;
     }
 
-    final String saved =
-        await SteamSyncService.getSavedReference() ?? '';
+    if (SteamSyncService.backgroundSyncRunning) {
+      _message(
+        'La synchro automatique du démarrage est déjà en cours. '
+        'Project XP continue en arrière-plan sans ralentir la Bibliothèque.',
+      );
+      return;
+    }
+
+    FocusManager.instance.primaryFocus?.unfocus();
+
+    final bool hasIdentity =
+        await SteamSyncService.hasSyncIdentity();
     if (!mounted) {
       return;
     }
 
-    final String? reference =
-        await _askSteamReference(saved);
-    if (reference == null || !mounted) {
+    if (!hasIdentity) {
+      _message('Lie d’abord une plateforme depuis COMPTES.');
+      await _openAccounts();
       return;
     }
 
     setState(() {
       _steamBusy = true;
+      _steamProgressLabel = 'Bibliothèque Steam…';
     });
 
     try {
-      final SteamLibrarySyncResult result =
-          await SteamSyncService.syncLibrary(reference);
+      final SteamLibrarySyncResult libraryResult =
+          await SteamSyncService.syncLibraryForLinkedAccount();
+
+      final List<GameLibraryEntry> refreshedLibrary =
+          await GameLibraryService.loadCurrentLibraryConsolidated();
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _games = refreshedLibrary;
+        _steamProgressLabel = 'Succès Steam…';
+      });
+
+      final SteamAllAchievementSyncResult achievementResult =
+          await SteamSyncService.syncAllAchievements(
+        library: refreshedLibrary,
+        activityChangedAppIds:
+            libraryResult.activityChangedAppIds,
+        force: true,
+        onProgress: (current, total, title) {
+          if (!mounted) {
+            return;
+          }
+          setState(() {
+            _steamProgressLabel = total == 0
+                ? 'Succès à jour'
+                : 'Succès $current / $total • $title';
+          });
+        },
+      );
+
       await _load();
       if (!mounted) {
         return;
       }
+
+      final List<String> details = <String>[
+        '${libraryResult.detected} jeux',
+        '${achievementResult.checkedGames} succès vérifiés',
+        if (achievementResult.gamesWithoutAchievements > 0)
+          '${achievementResult.gamesWithoutAchievements} sans succès',
+        if (achievementResult.unavailableGames > 0)
+          '${achievementResult.unavailableGames} non renseignés par Steam',
+        if (achievementResult.newlyUnlocked > 0)
+          '${achievementResult.newlyUnlocked} nouveaux succès',
+      ];
+
       final String baseMessage =
-          'Steam synchronisé : ${result.detected} jeux détectés, '
-          '${result.added} ajoutés, ${result.updated} mis à jour.';
+          'Synchronisation terminée • ${details.join(' • ')}.';
       _message(
-        result.warning == null || result.warning!.isEmpty
+        libraryResult.warning == null ||
+                libraryResult.warning!.isEmpty
             ? baseMessage
-            : '$baseMessage ${result.warning}',
+            : '$baseMessage ${libraryResult.warning}',
       );
     } on SteamSyncException catch (error) {
       if (mounted) {
@@ -170,98 +354,31 @@ class _GameLibraryScreenState extends State<GameLibraryScreen> {
       if (mounted) {
         setState(() {
           _steamBusy = false;
+          _steamProgressLabel = null;
         });
       }
     }
   }
 
-  Future<String?> _askSteamReference(String initial) {
-    final TextEditingController controller =
-        TextEditingController(text: initial);
-
-    return showDialog<String>(
-      context: context,
-      builder: (dialogContext) {
-        return AlertDialog(
-          backgroundColor: const Color(0xff17191c),
-          title: const Text(
-            'CONNECTER STEAM',
-            style: TextStyle(
-              color: Color(0xffffc857),
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'Entre ton SteamID64, ton URL de profil Steam '
-                'ou ton identifiant personnalisé.',
-                style: TextStyle(
-                  color: Colors.white70,
-                  height: 1.35,
-                ),
-              ),
-              const SizedBox(height: 14),
-              TextField(
-                controller: controller,
-                autofocus: true,
-                style: const TextStyle(color: Colors.white),
-                decoration: const InputDecoration(
-                  labelText: 'Profil Steam',
-                  hintText: 'steamcommunity.com/id/...',
-                  labelStyle: TextStyle(color: Colors.white60),
-                  hintStyle: TextStyle(color: Colors.white30),
-                  enabledBorder: OutlineInputBorder(
-                    borderSide: BorderSide(color: Colors.white24),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderSide:
-                        BorderSide(color: Color(0xffffc857)),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 10),
-              const Text(
-                'La bibliothèque Steam doit être visible '
-                'publiquement pour que Steam la renvoie.',
-                style: TextStyle(
-                  color: Colors.white38,
-                  fontSize: 11,
-                  height: 1.3,
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext),
-              child: const Text('ANNULER'),
-            ),
-            TextButton(
-              onPressed: () {
-                final String value = controller.text.trim();
-                if (value.isEmpty) {
-                  return;
-                }
-                Navigator.pop(dialogContext, value);
-              },
-              child: const Text(
-                'SYNCHRONISER',
-                style: TextStyle(
-                  color: Color(0xffffc857),
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ),
-          ],
-        );
-      },
-    ).whenComplete(controller.dispose);
+  Future<void> _openAccounts() async {
+    FocusManager.instance.primaryFocus?.unfocus();
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => const GamingAccountsScreen(),
+      ),
+    );
+    if (mounted) {
+      await _load();
+    }
   }
 
   Future<void> _editGame(GameLibraryEntry game) async {
+    final GameLibraryEntry currentGame = game;
+
+    if (!mounted) {
+      return;
+    }
+
     final _GameEditResult? result =
         await showModalBottomSheet<_GameEditResult>(
       context: context,
@@ -272,7 +389,8 @@ class _GameLibraryScreenState extends State<GameLibraryScreen> {
           top: Radius.circular(24),
         ),
       ),
-      builder: (sheetContext) => _GameEditSheet(game: game),
+      builder: (sheetContext) =>
+          _GameEditSheet(game: currentGame),
     );
 
     if (result == null || !mounted) {
@@ -280,11 +398,12 @@ class _GameLibraryScreenState extends State<GameLibraryScreen> {
     }
 
     if (result.delete) {
-      final bool confirmed = await _confirmDelete(game);
+      final bool confirmed =
+          await _confirmDelete(currentGame);
       if (!confirmed) {
         return;
       }
-      await GameLibraryService.removeGame(game.id);
+      await GameLibraryService.removeGame(currentGame.id);
       await _load();
       return;
     }
@@ -331,36 +450,6 @@ class _GameLibraryScreenState extends State<GameLibraryScreen> {
       ),
     );
     return result == true;
-  }
-
-  Future<void> _syncGameAchievements(
-    GameLibraryEntry game,
-  ) async {
-    setState(() {
-      _steamBusy = true;
-    });
-    try {
-      final GameAchievementSummary summary =
-          await SteamSyncService.syncAchievements(game);
-      await _load();
-      if (!mounted) {
-        return;
-      }
-      _message(
-        'Succès Steam synchronisés : '
-        '${summary.unlocked} / ${summary.total}.',
-      );
-    } on SteamSyncException catch (error) {
-      if (mounted) {
-        _message(error.message);
-      }
-    } finally {
-      if (mounted) {
-        setState(() {
-          _steamBusy = false;
-        });
-      }
-    }
   }
 
   void _message(String message) {
@@ -427,9 +516,76 @@ class _GameLibraryScreenState extends State<GameLibraryScreen> {
                     backlog: backlog,
                     completed: completed,
                     steamBusy: _steamBusy,
-                    onSteam: _connectSteam,
+                    steamProgressLabel: _steamProgressLabel,
+                    onAccounts: _openAccounts,
+                    onSteam: _syncAllSteam,
                   ),
                   const SizedBox(height: 14),
+                  TextField(
+                    controller: _searchController,
+                    autofocus: false,
+                    onChanged: (value) {
+                      setState(() {
+                        _searchQuery = value;
+                      });
+                    },
+                    style: const TextStyle(
+                      color: Colors.white,
+                    ),
+                    decoration: InputDecoration(
+                      hintText:
+                          'Rechercher dans mes ${_games.length} jeux...',
+                      hintStyle: const TextStyle(
+                        color: Colors.white38,
+                      ),
+                      prefixIcon: const Icon(
+                        Icons.search_rounded,
+                        color: Color(0xffffc857),
+                      ),
+                      suffixIcon: _searchQuery.isEmpty
+                          ? null
+                          : IconButton(
+                              tooltip: 'Effacer',
+                              onPressed: () {
+                                _searchController.clear();
+                                setState(() {
+                                  _searchQuery = '';
+                                });
+                              },
+                              icon: const Icon(
+                                Icons.close_rounded,
+                                color: Colors.white38,
+                              ),
+                            ),
+                      filled: true,
+                      fillColor: const Color(0xff1a1d20),
+                      contentPadding:
+                          const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 11,
+                      ),
+                      border: OutlineInputBorder(
+                        borderRadius:
+                            BorderRadius.circular(13),
+                        borderSide: BorderSide.none,
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius:
+                            BorderRadius.circular(13),
+                        borderSide: const BorderSide(
+                          color: Colors.white10,
+                        ),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius:
+                            BorderRadius.circular(13),
+                        borderSide: const BorderSide(
+                          color: Color(0xffffc857),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
                   SizedBox(
                     height: 42,
                     child: ListView(
@@ -446,7 +602,12 @@ class _GameLibraryScreenState extends State<GameLibraryScreen> {
                             });
                           },
                         ),
-                        ...GameStatus.values.map(
+                        ...GameStatus.values
+                            .where(
+                              (status) =>
+                                  status != GameStatus.unclassified,
+                            )
+                            .map(
                           (status) => _FilterChip(
                             label: status.label.toUpperCase(),
                             selected: _statusFilter == status &&
@@ -472,11 +633,99 @@ class _GameLibraryScreenState extends State<GameLibraryScreen> {
                       ],
                     ),
                   ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      const Icon(
+                        Icons.sort_rounded,
+                        color: Colors.white38,
+                        size: 18,
+                      ),
+                      const SizedBox(width: 7),
+                      const Text(
+                        'TRI',
+                        style: TextStyle(
+                          color: Colors.white38,
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 0.7,
+                        ),
+                      ),
+                      const Spacer(),
+                      PopupMenuButton<_LibrarySort>(
+                        initialValue: _sort,
+                        tooltip: 'Trier la Bibliothèque',
+                        color: const Color(0xff23262a),
+                        onSelected: (value) {
+                          setState(() {
+                            _sort = value;
+                          });
+                        },
+                        itemBuilder: (context) =>
+                            _LibrarySort.values
+                                .map(
+                                  (value) =>
+                                      PopupMenuItem<_LibrarySort>(
+                                    value: value,
+                                    child: Row(
+                                      children: [
+                                        if (value == _sort)
+                                          const Icon(
+                                            Icons.check,
+                                            color:
+                                                Color(0xffffc857),
+                                            size: 17,
+                                          )
+                                        else
+                                          const SizedBox(width: 17),
+                                        const SizedBox(width: 8),
+                                        Text(value.label),
+                                      ],
+                                    ),
+                                  ),
+                                )
+                                .toList(),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 11,
+                            vertical: 7,
+                          ),
+                          decoration: BoxDecoration(
+                            color: const Color(0xff1a1d20),
+                            borderRadius:
+                                BorderRadius.circular(10),
+                            border:
+                                Border.all(color: Colors.white10),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                _sort.label,
+                                style: const TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              const SizedBox(width: 5),
+                              const Icon(
+                                Icons.expand_more,
+                                color: Colors.white38,
+                                size: 17,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                   const SizedBox(height: 12),
                   if (games.isEmpty)
                     _EmptyLibrary(
                       filtered: _statusFilter != null ||
-                          _favoriteOnly,
+                          _favoriteOnly ||
+                          _searchQuery.isNotEmpty,
                     )
                   else
                     ...games.map(
@@ -486,13 +735,13 @@ class _GameLibraryScreenState extends State<GameLibraryScreen> {
                           game: game,
                           busy: _steamBusy || _catalogBusy,
                           onTap: () => _editGame(game),
-                          onEnrich: game.source == GameSource.manual
-                              ? () => _enrichGame(game)
-                              : null,
-                          onSyncAchievements:
-                              game.source == GameSource.steam
-                                  ? () =>
-                                      _syncGameAchievements(game)
+                          onFavorite: () =>
+                              _toggleFavorite(game),
+                          onEnrich:
+                              !game.hasOfficialPlatformConnection &&
+                                      (game.source == GameSource.manual ||
+                                          !game.hasCatalogMetadata)
+                                  ? () => _enrichGame(game)
                                   : null,
                         ),
                       ),
@@ -504,12 +753,15 @@ class _GameLibraryScreenState extends State<GameLibraryScreen> {
   }
 }
 
+
 class _LibraryHeader extends StatelessWidget {
   final int total;
   final int inProgress;
   final int backlog;
   final int completed;
   final bool steamBusy;
+  final String? steamProgressLabel;
+  final VoidCallback onAccounts;
   final VoidCallback onSteam;
 
   const _LibraryHeader({
@@ -518,6 +770,8 @@ class _LibraryHeader extends StatelessWidget {
     required this.backlog,
     required this.completed,
     required this.steamBusy,
+    required this.steamProgressLabel,
+    required this.onAccounts,
     required this.onSteam,
   });
 
@@ -568,6 +822,19 @@ class _LibraryHeader extends StatelessWidget {
           const SizedBox(height: 14),
           SizedBox(
             width: double.infinity,
+            child: FilledButton.icon(
+              onPressed: steamBusy ? null : onAccounts,
+              icon: const Icon(Icons.manage_accounts_rounded),
+              label: const Text('COMPTES'),
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xff2a3138),
+                foregroundColor: Colors.white,
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          SizedBox(
+            width: double.infinity,
             child: OutlinedButton.icon(
               onPressed: steamBusy ? null : onSteam,
               icon: steamBusy
@@ -582,7 +849,7 @@ class _LibraryHeader extends StatelessWidget {
               label: Text(
                 steamBusy
                     ? 'SYNCHRONISATION...'
-                    : 'CONNECTER / SYNCHRONISER STEAM',
+                    : 'SYNCHRONISER TOUT',
               ),
               style: OutlinedButton.styleFrom(
                 foregroundColor: const Color(0xffb7d8ff),
@@ -592,6 +859,20 @@ class _LibraryHeader extends StatelessWidget {
               ),
             ),
           ),
+          if (steamBusy &&
+              steamProgressLabel != null &&
+              steamProgressLabel!.isNotEmpty) ...[
+            const SizedBox(height: 7),
+            Text(
+              steamProgressLabel!,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Colors.white38,
+                fontSize: 10.5,
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -691,15 +972,15 @@ class _GameCard extends StatelessWidget {
   final GameLibraryEntry game;
   final bool busy;
   final VoidCallback onTap;
+  final VoidCallback onFavorite;
   final VoidCallback? onEnrich;
-  final VoidCallback? onSyncAchievements;
 
   const _GameCard({
     required this.game,
     required this.busy,
     required this.onTap,
+    required this.onFavorite,
     required this.onEnrich,
-    required this.onSyncAchievements,
   });
 
   @override
@@ -743,27 +1024,88 @@ class _GameCard extends StatelessWidget {
                             ),
                           ),
                         ),
-                        if (game.favorite)
-                          const Icon(
-                            Icons.star,
-                            color: Color(0xffffc857),
-                            size: 18,
+                        IconButton(
+                          tooltip: game.favorite
+                              ? 'Retirer des favoris'
+                              : 'Ajouter aux favoris',
+                          visualDensity: VisualDensity.compact,
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(
+                            minWidth: 30,
+                            minHeight: 30,
                           ),
+                          onPressed: busy ? null : onFavorite,
+                          icon: Icon(
+                            game.favorite
+                                ? Icons.star_rounded
+                                : Icons.star_border_rounded,
+                            color: game.favorite
+                                ? const Color(0xffffc857)
+                                : Colors.white30,
+                            size: 20,
+                          ),
+                        ),
                       ],
                     ),
                     const SizedBox(height: 4),
-                    Text(
-                      '${game.platform.label} • '
-                      '${game.status.label}',
-                      style: const TextStyle(
-                        color: Color(0xffb69bdc),
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                      ),
+                    Wrap(
+                      spacing: 5,
+                      runSpacing: 4,
+                      crossAxisAlignment:
+                          WrapCrossAlignment.center,
+                      children: [
+                        for (final GamePlatform platform
+                            in game.connectedPlatforms)
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 7,
+                              vertical: 3,
+                            ),
+                            decoration: BoxDecoration(
+                              color: const Color(0xff24202d),
+                              borderRadius:
+                                  BorderRadius.circular(20),
+                              border: Border.all(
+                                color: const Color(
+                                  0xffb69bdc,
+                                ).withValues(alpha: 0.28),
+                              ),
+                            ),
+                            child: Text(
+                              platform.label,
+                              style: const TextStyle(
+                                color: Color(0xffcbb3e8),
+                                fontSize: 9.5,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                        if (game.status !=
+                            GameStatus.unclassified)
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 7,
+                              vertical: 3,
+                            ),
+                            decoration: BoxDecoration(
+                              color: const Color(0xff18231c),
+                              borderRadius:
+                                  BorderRadius.circular(20),
+                            ),
+                            child: Text(
+                              game.status.label,
+                              style: const TextStyle(
+                                color: Color(0xff8fd5a6),
+                                fontSize: 9.5,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                      ],
                     ),
                     if (game.releaseYear != null ||
                         game.genres.isNotEmpty) ...[
-                      const SizedBox(height: 3),
+                      const SizedBox(height: 4),
                       Text(
                         [
                           if (game.releaseYear != null)
@@ -780,26 +1122,56 @@ class _GameCard extends StatelessWidget {
                       ),
                     ],
                     const SizedBox(height: 7),
-                    if (game.progressPercent > 0) ...[
-                      LinearProgressIndicator(
-                        value: game.progressPercent / 100,
-                        minHeight: 4,
-                        backgroundColor: Colors.white10,
-                        color: const Color(0xffffc857),
+                    if (game.bestCompletionPercent != null) ...[
+                      Row(
+                        children: [
+                          Expanded(
+                            child: LinearProgressIndicator(
+                              value:
+                                  game.bestCompletionPercent! /
+                                      100,
+                              minHeight: 4,
+                              backgroundColor:
+                                  Colors.white10,
+                              color:
+                                  const Color(0xffffc857),
+                            ),
+                          ),
+                          const SizedBox(width: 7),
+                          Text(
+                            '${game.bestCompletionPercent} %',
+                            style: const TextStyle(
+                              color: Color(0xffffc857),
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
                       ),
-                      const SizedBox(height: 5),
-                    ],
-                    Text(
-                      game.achievementProgressText,
-                      style: const TextStyle(
-                        color: Colors.white54,
-                        fontSize: 10.5,
+                      const SizedBox(height: 4),
+                      Text(
+                        game.bestCompletionPercent == 100
+                            ? '🏆 Complété sur ${game.bestCompletionProfile!.platform.label}'
+                            : 'Meilleure complétion • ${game.bestCompletionProfile!.platform.label}',
+                        style: const TextStyle(
+                          color: Colors.white54,
+                          fontSize: 10.5,
+                        ),
                       ),
-                    ),
-                    if (game.playtimeMinutes > 0) ...[
+                    ] else
+                      Text(
+                        game.allAchievementCatalogsKnownEmpty
+                            ? 'Aucun trophée/succès sur les plateformes synchronisées'
+                            : 'Complétion non synchronisée',
+                        style: const TextStyle(
+                          color: Colors.white38,
+                          fontSize: 10.5,
+                        ),
+                      ),
+                    if (game.totalPlaytimeMinutes > 0) ...[
                       const SizedBox(height: 3),
                       Text(
-                        '${(game.playtimeMinutes / 60).toStringAsFixed(1)} h jouées',
+                        '${(game.totalPlaytimeMinutes / 60).toStringAsFixed(1)} h détectées sur les plateformes liées',
                         style: const TextStyle(
                           color: Colors.white38,
                           fontSize: 10,
@@ -826,17 +1198,7 @@ class _GameCard extends StatelessWidget {
                         size: 20,
                       ),
                     ),
-                  if (onSyncAchievements != null)
-                    IconButton(
-                      tooltip: 'Synchroniser les succès Steam',
-                      onPressed:
-                          busy ? null : onSyncAchievements,
-                      icon: const Icon(
-                        Icons.cloud_sync_outlined,
-                        color: Color(0xff8ebce9),
-                        size: 20,
-                      ),
-                    ),
+
                 ],
               ),
             ],
@@ -860,35 +1222,14 @@ class _GameCover extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final String? url = game.coverUrl;
-    final Widget fallback = Container(
-      width: width,
-      height: height,
-      color: const Color(0xff111315),
-      alignment: Alignment.center,
-      child: const Icon(
-        Icons.sports_esports,
-        color: Colors.white30,
-      ),
-    );
-
     return ClipRRect(
       borderRadius: BorderRadius.circular(8),
-      child: url == null || url.isEmpty
-          ? fallback
-          : Image.network(
-              url,
-              width: width,
-              height: height,
-              fit: BoxFit.cover,
-              filterQuality: FilterQuality.medium,
-              errorBuilder: (
-                context,
-                error,
-                stackTrace,
-              ) =>
-                  fallback,
-            ),
+      child: GameCoverImage(
+        game: game,
+        width: width,
+        height: height,
+        fit: BoxFit.cover,
+      ),
     );
   }
 }
@@ -1037,7 +1378,7 @@ class _AddGameDialogState extends State<_AddGameDialog> {
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: TextField(
                 controller: _query,
-                autofocus: true,
+                autofocus: false,
                 textInputAction: TextInputAction.search,
                 onSubmitted: (_) => _search(),
                 style: const TextStyle(color: Colors.white),
@@ -1582,11 +1923,1419 @@ class _GameEditSheet extends StatefulWidget {
 
 class _GameEditSheetState extends State<_GameEditSheet> {
   late final TextEditingController _title;
-  late GamePlatform _platform;
   late GameStatus _status;
   late bool _favorite;
-  late double _progress;
+  late List<GamePlatformProfile> _profiles;
+  late GamePlatform _selectedPlatform;
+  _AchievementFilter _achievementFilter =
+      _AchievementFilter.all;
+  final Set<GamePlatform> _manualEditorsExpanded =
+      <GamePlatform>{};
 
+  @override
+  void initState() {
+    super.initState();
+
+    final GameLibraryEntry game = widget.game;
+
+    _title = TextEditingController(text: game.title);
+    _status = game.status;
+    _favorite = game.favorite;
+    _profiles = List<GamePlatformProfile>.from(
+      game.resolvedPlatformProfiles,
+    );
+
+    final GamePlatformProfile? steam =
+        game.platformProfile(GamePlatform.steam);
+
+    _selectedPlatform =
+        steam?.platform ??
+        (_profiles.isNotEmpty
+            ? _profiles.first.platform
+            : game.platform);
+  }
+
+  @override
+  void dispose() {
+    _title.dispose();
+    super.dispose();
+  }
+
+  GamePlatformProfile? get _selectedProfile {
+    for (final GamePlatformProfile profile in _profiles) {
+      if (profile.platform == _selectedPlatform) {
+        return profile;
+      }
+    }
+
+    return null;
+  }
+
+  List<int> get _visibleAchievementIndexes {
+    final GamePlatformProfile? profile =
+        _selectedProfile;
+
+    if (profile == null) {
+      return const <int>[];
+    }
+
+    final List<GameAchievementDetail> details =
+        profile.achievementDetails;
+
+    return List<int>.generate(
+      details.length,
+      (index) => index,
+    ).where(
+      (index) {
+        final bool unlocked =
+            details[index].isUnlocked;
+
+        switch (_achievementFilter) {
+          case _AchievementFilter.all:
+            return true;
+          case _AchievementFilter.unlocked:
+            return unlocked;
+          case _AchievementFilter.locked:
+            return !unlocked;
+        }
+      },
+    ).toList();
+  }
+
+  void _replaceProfile(
+    GamePlatformProfile profile,
+  ) {
+    final int index = _profiles.indexWhere(
+      (item) => item.platform == profile.platform,
+    );
+
+    if (index == -1) {
+      _profiles.add(profile);
+    } else {
+      _profiles[index] = profile;
+    }
+  }
+
+  void _toggleAchievement(
+    int index,
+    bool unlocked,
+  ) {
+    final GamePlatformProfile? profile =
+        _selectedProfile;
+
+    if (profile == null ||
+        index < 0 ||
+        index >= profile.achievementDetails.length) {
+      return;
+    }
+
+    final List<GameAchievementDetail> details =
+        List<GameAchievementDetail>.from(
+      profile.achievementDetails,
+    );
+
+    final GameAchievementDetail achievement =
+        details[index];
+
+    if (achievement.platformUnlocked) {
+      return;
+    }
+
+    details[index] =
+        achievement.withManualState(unlocked);
+
+    final GamePlatformProfile next =
+        profile.copyWith(
+      achievementDetails: details,
+      achievementCatalogInitialized:
+          profile.achievementCatalogInitialized ||
+              details.isNotEmpty,
+    );
+
+    _replaceProfile(
+      next.copyWith(
+        achievements:
+            next.computedAchievementSummary,
+      ),
+    );
+  }
+
+  void _save() {
+    final bool titleLocked =
+        widget.game.hasOfficialPlatformConnection;
+    final String title = titleLocked
+        ? widget.game.title
+        : _title.text.trim();
+
+    if (title.isEmpty) {
+      return;
+    }
+
+    final List<GamePlatformProfile> normalizedProfiles =
+        _profiles
+            .map(
+              (profile) => profile.copyWith(
+                achievements:
+                    profile.computedAchievementSummary,
+              ),
+            )
+            .toList();
+
+    final GameLibraryEntry updated =
+        widget.game.copyWith(
+      title: title,
+      status: _status,
+      favorite: _favorite,
+      platformProfiles: normalizedProfiles,
+    );
+
+    Navigator.pop(
+      context,
+      _GameEditResult.save(updated),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final EdgeInsets viewInsets =
+        MediaQuery.viewInsetsOf(context);
+    final GameLibraryEntry game = widget.game;
+    final GamePlatformProfile? best =
+        _bestProfile(_profiles);
+    final GamePlatformProfile? selected =
+        _selectedProfile;
+    final List<int> visibleAchievementIndexes =
+        _visibleAchievementIndexes;
+    final int selectedUnlockedCount =
+        selected?.achievementDetails
+                .where(
+                  (achievement) => achievement.isUnlocked,
+                )
+                .length ??
+            0;
+    final int selectedLockedCount =
+        (selected?.achievementDetails.length ?? 0) -
+            selectedUnlockedCount;
+
+    return Padding(
+      padding: EdgeInsets.only(
+        bottom: viewInsets.bottom,
+      ),
+      child: SafeArea(
+        top: false,
+        child: SingleChildScrollView(
+          padding:
+              const EdgeInsets.fromLTRB(
+            18,
+            14,
+            18,
+            24,
+          ),
+          child: Column(
+            crossAxisAlignment:
+                CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 42,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.white24,
+                    borderRadius:
+                        BorderRadius.circular(20),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                crossAxisAlignment:
+                    CrossAxisAlignment.start,
+                children: [
+                  _GameCover(
+                    game: game,
+                    width: 72,
+                    height: 102,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment:
+                          CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'FICHE DU JEU',
+                          style: TextStyle(
+                            color:
+                                Color(0xffffc857),
+                            fontSize: 18,
+                            fontWeight:
+                                FontWeight.bold,
+                            letterSpacing: 1.2,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        if (game.releaseYear != null)
+                          Text(
+                            'Sortie : ${game.releaseYear}',
+                            style:
+                                const TextStyle(
+                              color:
+                                  Colors.white54,
+                            ),
+                          ),
+                        if (game.genres.isNotEmpty)
+                          Text(
+                            game.genres.join(' • '),
+                            maxLines: 2,
+                            overflow:
+                                TextOverflow.ellipsis,
+                            style:
+                                const TextStyle(
+                              color:
+                                  Color(0xffcbb3e8),
+                              fontSize: 11,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              if (game.summary != null &&
+                  game.summary!.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                Text(
+                  game.summary!,
+                  maxLines: 5,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white54,
+                    fontSize: 11,
+                    height: 1.35,
+                  ),
+                ),
+              ],
+              const SizedBox(height: 14),
+              TextField(
+                controller: _title,
+                readOnly:
+                    game.hasOfficialPlatformConnection,
+                enableInteractiveSelection: true,
+                style:
+                    const TextStyle(
+                  color: Colors.white,
+                ),
+                decoration: InputDecoration(
+                  labelText: 'Nom du jeu',
+                  suffixIcon:
+                      game.hasOfficialPlatformConnection
+                          ? const Icon(
+                              Icons.lock_outline,
+                              color: Colors.white38,
+                              size: 19,
+                            )
+                          : null,
+                  helperText:
+                      game.hasOfficialPlatformConnection
+                          ? 'Nom verrouillé : cette fiche est liée à une plateforme synchronisée.'
+                          : null,
+                  helperStyle:
+                      const TextStyle(
+                    color: Colors.white38,
+                    fontSize: 9.5,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<GameStatus>(
+                initialValue:
+                    _status ==
+                            GameStatus.unclassified
+                        ? null
+                        : _status,
+                dropdownColor:
+                    const Color(0xff23262a),
+                decoration:
+                    const InputDecoration(
+                  labelText: 'État personnel',
+                  hintText: 'Choisir un état',
+                ),
+                items: GameStatus.values
+                    .where(
+                      (status) =>
+                          status !=
+                          GameStatus.unclassified,
+                    )
+                    .map(
+                      (status) =>
+                          DropdownMenuItem<
+                              GameStatus>(
+                        value: status,
+                        child:
+                            Text(status.label),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (value) {
+                  if (value == null) {
+                    return;
+                  }
+
+                  setState(() {
+                    _status = value;
+                  });
+                },
+              ),
+              const SizedBox(height: 4),
+              SwitchListTile(
+                contentPadding:
+                    EdgeInsets.zero,
+                title: const Text(
+                  'Favori',
+                  style:
+                      TextStyle(
+                    color: Colors.white,
+                  ),
+                ),
+                value: _favorite,
+                activeThumbColor:
+                    const Color(0xffffc857),
+                onChanged: (value) {
+                  setState(() {
+                    _favorite = value;
+                  });
+                },
+              ),
+              const Divider(
+                color: Colors.white12,
+                height: 28,
+              ),
+              const Text(
+                'COMPLÉTION',
+                style: TextStyle(
+                  color: Color(0xffffc857),
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 0.9,
+                ),
+              ),
+              const SizedBox(height: 5),
+              const Text(
+                'Chaque plateforme garde sa propre progression. '
+                'Project XP met en avant ta meilleure complétion et ne fait pas '
+                'une moyenne qui pourrait diminuer un 100 % déjà obtenu.',
+                style: TextStyle(
+                  color: Colors.white38,
+                  fontSize: 10.5,
+                  height: 1.35,
+                ),
+              ),
+              const SizedBox(height: 12),
+              if (best != null &&
+                  best.completionPercent != null)
+                _BestCompletionCard(
+                  profile: best,
+                )
+              else
+                const _UnknownCompletionCard(),
+              const SizedBox(height: 12),
+              for (final GamePlatformProfile profile
+                  in _profiles) ...[
+                _PlatformProgressCard(
+                  profile: profile,
+                  selected:
+                      profile.platform ==
+                          _selectedPlatform,
+                  onTap: () {
+                    setState(() {
+                      _selectedPlatform =
+                          profile.platform;
+                      _achievementFilter =
+                          _AchievementFilter.all;
+                    });
+                  },
+                ),
+                const SizedBox(height: 8),
+              ],
+              if (selected != null) ...[
+                const Divider(
+                  color: Colors.white12,
+                  height: 28,
+                ),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        selected
+                                .achievementCatalogKnownEmpty
+                            ? selected.platform.label
+                                .toUpperCase()
+                            : selected.platform ==
+                                    GamePlatform
+                                        .playstation
+                                ? 'TROPHÉES PLAYSTATION'
+                                : 'SUCCÈS ${selected.platform.label.toUpperCase()}',
+                        style:
+                            const TextStyle(
+                          color:
+                              Color(0xffb69bdc),
+                          fontWeight:
+                              FontWeight.bold,
+                          letterSpacing: 0.8,
+                        ),
+                      ),
+                    ),
+                    if (!selected
+                            .achievementCatalogKnownEmpty &&
+                        selected
+                                .completionPercent !=
+                            null)
+                      Text(
+                        '${selected.completionPercent} %',
+                        style:
+                            const TextStyle(
+                          color:
+                              Color(0xffffc857),
+                          fontSize: 12,
+                          fontWeight:
+                              FontWeight.bold,
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 5),
+                if (selected
+                    .achievementCatalogKnownEmpty)
+                  Text(
+                    selected.platform ==
+                            GamePlatform
+                                .playstation
+                        ? 'Ce jeu ne possède aucun trophée détecté sur PlayStation.'
+                        : 'Ce jeu ne possède aucun succès détecté sur ${selected.platform.label}.',
+                    style:
+                        const TextStyle(
+                      color:
+                          Colors.white54,
+                      fontSize: 11,
+                      height: 1.3,
+                    ),
+                  )
+                else
+                  Text(
+                    selected.progressText,
+                    style:
+                        const TextStyle(
+                      color:
+                          Colors.white54,
+                      fontSize: 11,
+                    ),
+                  ),
+                if (selected.platform ==
+                    GamePlatform.steam) ...[
+                  const SizedBox(height: 5),
+                  Text(
+                    selected
+                            .achievementCatalogKnownEmpty
+                        ? 'Steam a renvoyé un catalogue vide : Project XP n’affiche donc aucune fausse barre de progression.'
+                        : selected
+                                .achievementCatalogInitialized
+                            ? 'La liste peut être cochée manuellement. Une prochaine synchro Steam confirmera les succès officiels sans effacer les coches manuelles.'
+                            : 'Utilise l’icône de synchronisation Steam sur la carte du jeu pour récupérer la liste détaillée.',
+                    style:
+                        const TextStyle(
+                      color:
+                          Colors.white38,
+                      fontSize: 10,
+                      height: 1.3,
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 12),
+                if (selected
+                    .achievementCatalogKnownEmpty)
+                  Container(
+                    width: double.infinity,
+                    padding:
+                        const EdgeInsets.all(
+                      12,
+                    ),
+                    decoration:
+                        BoxDecoration(
+                      color:
+                          const Color(
+                        0xff15181b,
+                      ),
+                      borderRadius:
+                          BorderRadius
+                              .circular(
+                        11,
+                      ),
+                      border:
+                          Border.all(
+                        color:
+                            Colors.white10,
+                      ),
+                    ),
+                    child:
+                        Row(
+                      children: [
+                        const Icon(
+                          Icons.block,
+                          color:
+                              Colors.white38,
+                          size: 20,
+                        ),
+                        const SizedBox(
+                          width: 9,
+                        ),
+                        Expanded(
+                          child:
+                              Text(
+                            selected.platform ==
+                                    GamePlatform
+                                        .playstation
+                                ? 'Aucun trophée à suivre pour cette version.'
+                                : 'Aucun succès à suivre pour cette version.',
+                            style:
+                                const TextStyle(
+                              color:
+                                  Colors.white54,
+                              fontSize: 10.5,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                else if (selected
+                    .achievementDetails
+                    .isNotEmpty) ...[
+                  Wrap(
+                    spacing: 7,
+                    runSpacing: 7,
+                    children:
+                        _AchievementFilter
+                            .values
+                            .map(
+                      (filter) {
+                        final int count =
+                            switch (filter) {
+                          _AchievementFilter
+                                .all =>
+                            selected
+                                .achievementDetails
+                                .length,
+                          _AchievementFilter
+                                .unlocked =>
+                            selectedUnlockedCount,
+                          _AchievementFilter
+                                .locked =>
+                            selectedLockedCount,
+                        };
+
+                        return ChoiceChip(
+                          label: Text(
+                            '${filter.label} ($count)',
+                          ),
+                          selected:
+                              _achievementFilter ==
+                                  filter,
+                          onSelected:
+                              (_) {
+                            setState(() {
+                              _achievementFilter =
+                                  filter;
+                            });
+                          },
+                          selectedColor:
+                              const Color(
+                            0xff3a2e19,
+                          ),
+                          backgroundColor:
+                              const Color(
+                            0xff15181b,
+                          ),
+                          side:
+                              BorderSide(
+                            color:
+                                _achievementFilter ==
+                                        filter
+                                    ? const Color(
+                                        0xffffc857,
+                                      )
+                                    : Colors
+                                        .white12,
+                          ),
+                          labelStyle:
+                              TextStyle(
+                            color:
+                                _achievementFilter ==
+                                        filter
+                                    ? const Color(
+                                        0xffffc857,
+                                      )
+                                    : Colors
+                                        .white54,
+                            fontSize: 9.5,
+                            fontWeight:
+                                FontWeight.bold,
+                          ),
+                          visualDensity:
+                              VisualDensity
+                                  .compact,
+                        );
+                      },
+                    ).toList(),
+                  ),
+                  const SizedBox(
+                    height: 10,
+                  ),
+                  if (visibleAchievementIndexes
+                      .isEmpty)
+                    Container(
+                      width:
+                          double.infinity,
+                      padding:
+                          const EdgeInsets
+                              .all(
+                        12,
+                      ),
+                      decoration:
+                          BoxDecoration(
+                        color:
+                            const Color(
+                          0xff15181b,
+                        ),
+                        borderRadius:
+                            BorderRadius
+                                .circular(
+                          10,
+                        ),
+                        border:
+                            Border.all(
+                          color:
+                              Colors.white10,
+                        ),
+                      ),
+                      child:
+                          Text(
+                        _achievementFilter ==
+                                _AchievementFilter
+                                    .unlocked
+                            ? 'Aucun accomplissement obtenu dans ce filtre.'
+                            : 'Aucun accomplissement restant dans ce filtre.',
+                        style:
+                            const TextStyle(
+                          color:
+                              Colors.white38,
+                          fontSize: 10.5,
+                        ),
+                      ),
+                    )
+                  else
+                    ...visibleAchievementIndexes
+                        .map(
+                      (index) {
+                        final GameAchievementDetail
+                            achievement =
+                            selected
+                                    .achievementDetails[
+                                index];
+
+                        final String sourceLabel =
+                            achievement
+                                    .platformUnlocked
+                                ? 'Confirmé par ${selected.platform.label}'
+                                : achievement
+                                        .manuallyUnlocked
+                                    ? 'Coché manuellement • en attente de confirmation'
+                                    : 'Non obtenu';
+
+                        final Widget icon =
+                            achievement.iconUrl ==
+                                        null ||
+                                    achievement
+                                        .iconUrl!
+                                        .isEmpty
+                                ? Icon(
+                                    achievement
+                                            .isUnlocked
+                                        ? Icons
+                                            .emoji_events
+                                        : Icons
+                                            .lock_outline,
+                                    color: achievement
+                                            .isUnlocked
+                                        ? const Color(
+                                            0xffffc857,
+                                          )
+                                        : Colors
+                                            .white24,
+                                    size: 26,
+                                  )
+                                : ClipRRect(
+                                    borderRadius:
+                                        BorderRadius
+                                            .circular(
+                                      6,
+                                    ),
+                                    child:
+                                        Image.network(
+                                      achievement
+                                          .iconUrl!,
+                                      width: 34,
+                                      height: 34,
+                                      fit:
+                                          BoxFit.cover,
+                                      errorBuilder: (
+                                        context,
+                                        error,
+                                        stackTrace,
+                                      ) =>
+                                          Icon(
+                                        achievement
+                                                .isUnlocked
+                                            ? Icons
+                                                .emoji_events
+                                            : Icons
+                                                .lock_outline,
+                                        color: achievement
+                                                .isUnlocked
+                                            ? const Color(
+                                                0xffffc857,
+                                              )
+                                            : Colors
+                                                .white24,
+                                      ),
+                                    ),
+                                  );
+
+                        return Container(
+                          margin:
+                              const EdgeInsets
+                                  .only(
+                            bottom: 7,
+                          ),
+                          decoration:
+                              BoxDecoration(
+                            color:
+                                const Color(
+                              0xff111315,
+                            ),
+                            borderRadius:
+                                BorderRadius
+                                    .circular(
+                              10,
+                            ),
+                            border:
+                                Border.all(
+                              color: achievement
+                                      .isUnlocked
+                                  ? const Color(
+                                      0xffffc857,
+                                    ).withValues(
+                                      alpha: 0.22,
+                                    )
+                                  : Colors
+                                      .white10,
+                            ),
+                          ),
+                          child:
+                              CheckboxListTile(
+                            value: achievement
+                                .isUnlocked,
+                            secondary: icon,
+                            contentPadding:
+                                const EdgeInsets
+                                    .symmetric(
+                              horizontal: 10,
+                              vertical: 3,
+                            ),
+                            dense: true,
+                            controlAffinity:
+                                ListTileControlAffinity
+                                    .trailing,
+                            activeColor:
+                                const Color(
+                              0xffffc857,
+                            ),
+                            checkColor:
+                                const Color(
+                              0xff21150e,
+                            ),
+                            title: Text(
+                              achievement.name,
+                              style:
+                                  const TextStyle(
+                                color:
+                                    Colors.white,
+                                fontSize: 12,
+                                fontWeight:
+                                    FontWeight
+                                        .w600,
+                              ),
+                            ),
+                            subtitle: Column(
+                              crossAxisAlignment:
+                                  CrossAxisAlignment
+                                      .start,
+                              children: [
+                                if (achievement
+                                    .description
+                                    .isNotEmpty)
+                                  Text(
+                                    achievement
+                                        .description,
+                                    maxLines: 2,
+                                    overflow:
+                                        TextOverflow
+                                            .ellipsis,
+                                    style:
+                                        const TextStyle(
+                                      color: Colors
+                                          .white38,
+                                      fontSize: 10,
+                                      height: 1.25,
+                                    ),
+                                  ),
+                                const SizedBox(
+                                  height: 2,
+                                ),
+                                Text(
+                                  sourceLabel,
+                                  style:
+                                      TextStyle(
+                                    color: achievement
+                                            .platformUnlocked
+                                        ? const Color(
+                                            0xff8fd5a6,
+                                          )
+                                        : achievement
+                                                .manuallyUnlocked
+                                            ? const Color(
+                                                0xff8ebce9,
+                                              )
+                                            : Colors
+                                                .white24,
+                                    fontSize: 9.5,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            onChanged: achievement
+                                    .platformUnlocked
+                                ? null
+                                : (value) {
+                                    setState(() {
+                                      _toggleAchievement(
+                                        index,
+                                        value ==
+                                            true,
+                                      );
+                                    });
+                                  },
+                          ),
+                        );
+                      },
+                    )
+                ] else if (selected
+                    .hasAchievementData)
+                  _ManualSummaryEditor(
+                    key: ValueKey<String>(
+                      'manual_${selected.platform.name}',
+                    ),
+                    profile: selected,
+                    onChanged: (summary) {
+                      setState(() {
+                        _replaceProfile(
+                          selected.copyWith(
+                            achievements: summary,
+                          ),
+                        );
+                      });
+                    },
+                  )
+                else if (_manualEditorsExpanded
+                    .contains(
+                  selected.platform,
+                ))
+                  _ManualSummaryEditor(
+                    key: ValueKey<String>(
+                      'manual_${selected.platform.name}',
+                    ),
+                    profile: selected,
+                    onChanged: (summary) {
+                      setState(() {
+                        _replaceProfile(
+                          selected.copyWith(
+                            achievements: summary,
+                          ),
+                        );
+                      });
+                    },
+                  )
+                else
+                  Container(
+                    width:
+                        double.infinity,
+                    padding:
+                        const EdgeInsets
+                            .all(
+                      12,
+                    ),
+                    decoration:
+                        BoxDecoration(
+                      color:
+                          const Color(
+                        0xff15181b,
+                      ),
+                      borderRadius:
+                          BorderRadius
+                              .circular(
+                        11,
+                      ),
+                      border:
+                          Border.all(
+                        color:
+                            Colors.white10,
+                      ),
+                    ),
+                    child:
+                        Column(
+                      crossAxisAlignment:
+                          CrossAxisAlignment
+                              .start,
+                      children: [
+                        Text(
+                          selected.platform ==
+                                  GamePlatform
+                                      .playstation
+                              ? 'Aucun trophée renseigné pour cette version.'
+                              : 'Aucun succès renseigné pour cette version.',
+                          style:
+                              const TextStyle(
+                            color:
+                                Colors.white54,
+                            fontSize: 10.5,
+                          ),
+                        ),
+                        const SizedBox(
+                          height: 9,
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: () {
+                            setState(() {
+                              _manualEditorsExpanded
+                                  .add(
+                                selected.platform,
+                              );
+                            });
+                          },
+                          icon:
+                              const Icon(
+                            Icons.edit_note,
+                            size: 18,
+                          ),
+                          label:
+                              const Text(
+                            'RENSEIGNER MANUELLEMENT',
+                          ),
+                          style:
+                              OutlinedButton
+                                  .styleFrom(
+                            foregroundColor:
+                                const Color(
+                              0xffcbb3e8,
+                            ),
+                            side:
+                                const BorderSide(
+                              color:
+                                  Color(
+                                0x55CBB3E8,
+                              ),
+                            ),
+                            textStyle:
+                                const TextStyle(
+                              fontSize: 9.5,
+                              fontWeight:
+                                  FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+              const SizedBox(height: 20),
+              Row(
+                children: [
+                  Expanded(
+                    child:
+                        OutlinedButton.icon(
+                      onPressed: () {
+                        Navigator.pop(
+                          context,
+                          const _GameEditResult
+                              .delete(),
+                        );
+                      },
+                      icon: const Icon(
+                        Icons.delete_outline,
+                      ),
+                      label:
+                          const Text(
+                        'RETIRER',
+                      ),
+                      style: OutlinedButton
+                          .styleFrom(
+                        foregroundColor:
+                            Colors.redAccent,
+                        side:
+                            const BorderSide(
+                          color:
+                              Colors.redAccent,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    flex: 2,
+                    child:
+                        FilledButton.icon(
+                      onPressed: _save,
+                      icon: const Icon(
+                        Icons.save_outlined,
+                      ),
+                      label: const Text(
+                        'ENREGISTRER',
+                      ),
+                      style: FilledButton
+                          .styleFrom(
+                        backgroundColor:
+                            const Color(
+                          0xffffc857,
+                        ),
+                        foregroundColor:
+                            const Color(
+                          0xff21150e,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  GamePlatformProfile? _bestProfile(
+    List<GamePlatformProfile> profiles,
+  ) {
+    GamePlatformProfile? best;
+    int bestValue = -1;
+
+    for (final GamePlatformProfile profile
+        in profiles) {
+      final int? value =
+          profile.completionPercent;
+
+      if (value == null) {
+        continue;
+      }
+
+      if (value > bestValue) {
+        best = profile;
+        bestValue = value;
+      }
+    }
+
+    return best;
+  }
+}
+
+class _BestCompletionCard extends StatelessWidget {
+  final GamePlatformProfile profile;
+
+  const _BestCompletionCard({
+    required this.profile,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final int value =
+        profile.completionPercent ?? 0;
+
+    return Container(
+      width: double.infinity,
+      padding:
+          const EdgeInsets.all(13),
+      decoration: BoxDecoration(
+        color:
+            const Color(0xff201b12),
+        borderRadius:
+            BorderRadius.circular(13),
+        border: Border.all(
+          color:
+              const Color(0xffffc857)
+                  .withValues(alpha: 0.35),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment:
+            CrossAxisAlignment.start,
+        children: [
+          Text(
+            value == 100
+                ? '🏆 100 % COMPLÉTÉ'
+                : 'MEILLEURE COMPLÉTION',
+            style: const TextStyle(
+              color:
+                  Color(0xffffc857),
+              fontWeight:
+                  FontWeight.bold,
+              fontSize: 12,
+            ),
+          ),
+          const SizedBox(height: 7),
+          LinearProgressIndicator(
+            value: value / 100,
+            minHeight: 7,
+            backgroundColor:
+                Colors.white10,
+            color:
+                const Color(0xffffc857),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            '${profile.platform.label} • $value % • ${profile.progressText}',
+            style: const TextStyle(
+              color: Colors.white70,
+              fontSize: 10.5,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _UnknownCompletionCard
+    extends StatelessWidget {
+  const _UnknownCompletionCard();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding:
+          const EdgeInsets.all(13),
+      decoration: BoxDecoration(
+        color:
+            const Color(0xff15181b),
+        borderRadius:
+            BorderRadius.circular(13),
+        border:
+            Border.all(
+          color: Colors.white10,
+        ),
+      ),
+      child: const Text(
+        'Aucune progression de trophées/succès connue pour le moment.',
+        style: TextStyle(
+          color: Colors.white38,
+          fontSize: 10.5,
+        ),
+      ),
+    );
+  }
+}
+
+class _PlatformProgressCard
+    extends StatelessWidget {
+  final GamePlatformProfile profile;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _PlatformProgressCard({
+    required this.profile,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final int? value =
+        profile.completionPercent;
+
+    return Material(
+      color: selected
+          ? const Color(0xff24202d)
+          : const Color(0xff15181b),
+      borderRadius:
+          BorderRadius.circular(12),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius:
+            BorderRadius.circular(12),
+        child: Container(
+          padding:
+              const EdgeInsets.all(11),
+          decoration: BoxDecoration(
+            borderRadius:
+                BorderRadius.circular(12),
+            border: Border.all(
+              color: selected
+                  ? const Color(
+                      0xffb69bdc,
+                    )
+                  : Colors.white10,
+            ),
+          ),
+          child: Column(
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    _platformIcon(
+                      profile.platform,
+                    ),
+                    color: selected
+                        ? const Color(
+                            0xffcbb3e8,
+                          )
+                        : Colors.white54,
+                    size: 18,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      profile
+                          .platform.label,
+                      style:
+                          const TextStyle(
+                        color:
+                            Colors.white,
+                        fontSize: 12,
+                        fontWeight:
+                            FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  Text(
+                    value == null
+                        ? '—'
+                        : '$value %',
+                    style:
+                        const TextStyle(
+                      color: Color(
+                        0xffffc857,
+                      ),
+                      fontSize: 11,
+                      fontWeight:
+                          FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+              if (value != null) ...[
+                const SizedBox(height: 7),
+                LinearProgressIndicator(
+                  value: value / 100,
+                  minHeight: 5,
+                  backgroundColor:
+                      Colors.white10,
+                  color:
+                      const Color(
+                    0xffffc857,
+                  ),
+                ),
+                const SizedBox(height: 5),
+              ] else
+                const SizedBox(height: 5),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      profile.achievementCatalogKnownEmpty
+                          ? profile.platform ==
+                                  GamePlatform
+                                      .playstation
+                              ? 'Aucun trophée sur cette version'
+                              : 'Aucun succès sur cette version'
+                          : value == null
+                              ? 'Complétion non renseignée'
+                              : profile.progressText,
+                      style:
+                          const TextStyle(
+                        color:
+                            Colors.white54,
+                        fontSize: 10,
+                      ),
+                    ),
+                  ),
+                  if (profile
+                          .playtimeMinutes >
+                      0)
+                    Text(
+                      '${(profile.playtimeMinutes / 60).toStringAsFixed(1)} h',
+                      style:
+                          const TextStyle(
+                        color:
+                            Colors.white38,
+                        fontSize: 9.5,
+                      ),
+                    ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  static IconData _platformIcon(
+    GamePlatform platform,
+  ) {
+    switch (platform) {
+      case GamePlatform.steam:
+        return Icons.computer_rounded;
+      case GamePlatform.playstation:
+        return Icons.sports_esports_rounded;
+      case GamePlatform.xbox:
+        return Icons.gamepad_rounded;
+      case GamePlatform.epic:
+        return Icons.window_rounded;
+      case GamePlatform.nintendo:
+        return Icons.videogame_asset_rounded;
+      case GamePlatform.pc:
+        return Icons.desktop_windows_rounded;
+      case GamePlatform.other:
+        return Icons.devices_other_rounded;
+    }
+  }
+}
+
+class _ManualSummaryEditor extends StatefulWidget {
+  final GamePlatformProfile profile;
+  final ValueChanged<GameAchievementSummary> onChanged;
+
+  const _ManualSummaryEditor({
+    super.key,
+    required this.profile,
+    required this.onChanged,
+  });
+
+  @override
+  State<_ManualSummaryEditor> createState() =>
+      _ManualSummaryEditorState();
+}
+
+class _ManualSummaryEditorState
+    extends State<_ManualSummaryEditor> {
   late final TextEditingController _unlocked;
   late final TextEditingController _total;
   late final TextEditingController _bronzeUnlocked;
@@ -1603,15 +3352,14 @@ class _GameEditSheetState extends State<_GameEditSheet> {
   @override
   void initState() {
     super.initState();
-    final GameLibraryEntry game = widget.game;
-    final GameAchievementSummary a = game.achievements;
-    _title = TextEditingController(text: game.title);
-    _platform = game.platform;
-    _status = game.status;
-    _favorite = game.favorite;
-    _progress = game.progressPercent.toDouble();
-    _unlocked = TextEditingController(text: '${a.unlocked}');
-    _total = TextEditingController(text: '${a.total}');
+
+    final GameAchievementSummary a =
+        widget.profile.computedAchievementSummary;
+
+    _unlocked =
+        TextEditingController(text: '${a.unlocked}');
+    _total =
+        TextEditingController(text: '${a.total}');
     _bronzeUnlocked =
         TextEditingController(text: '${a.bronzeUnlocked}');
     _bronzeTotal =
@@ -1636,8 +3384,8 @@ class _GameEditSheetState extends State<_GameEditSheet> {
 
   @override
   void dispose() {
-    for (final TextEditingController controller in [
-      _title,
+    for (final TextEditingController controller
+        in <TextEditingController>[
       _unlocked,
       _total,
       _bronzeUnlocked,
@@ -1653,361 +3401,171 @@ class _GameEditSheetState extends State<_GameEditSheet> {
     ]) {
       controller.dispose();
     }
+
     super.dispose();
   }
 
-  int _read(TextEditingController controller) {
-    return int.tryParse(controller.text.trim()) ?? 0;
+  int _read(
+    TextEditingController controller,
+  ) {
+    return int.tryParse(
+          controller.text.trim(),
+        ) ??
+        0;
   }
 
-  GameAchievementSummary _summary() {
-    return GameAchievementSummary(
-      unlocked: _read(_unlocked),
-      total: _read(_total),
-      bronzeUnlocked: _read(_bronzeUnlocked),
-      bronzeTotal: _read(_bronzeTotal),
-      silverUnlocked: _read(_silverUnlocked),
-      silverTotal: _read(_silverTotal),
-      goldUnlocked: _read(_goldUnlocked),
-      goldTotal: _read(_goldTotal),
-      platinumUnlocked: _read(_platinumUnlocked),
-      platinumTotal: _read(_platinumTotal),
-      scoreEarned: _read(_scoreEarned),
-      scoreTotal: _read(_scoreTotal),
-    );
-  }
-
-  void _save() {
-    final String title = _title.text.trim();
-    if (title.isEmpty) {
-      return;
-    }
-    final GameLibraryEntry updated = widget.game.copyWith(
-      title: title,
-      platform: _platform,
-      status: _status,
-      favorite: _favorite,
-      progressPercent: _progress.round(),
-      achievements: _summary(),
-    );
-    Navigator.pop(
-      context,
-      _GameEditResult.save(updated),
+  void _emit() {
+    widget.onChanged(
+      GameAchievementSummary(
+        unlocked: _read(_unlocked),
+        total: _read(_total),
+        bronzeUnlocked:
+            _read(_bronzeUnlocked),
+        bronzeTotal:
+            _read(_bronzeTotal),
+        silverUnlocked:
+            _read(_silverUnlocked),
+        silverTotal:
+            _read(_silverTotal),
+        goldUnlocked:
+            _read(_goldUnlocked),
+        goldTotal:
+            _read(_goldTotal),
+        platinumUnlocked:
+            _read(_platinumUnlocked),
+        platinumTotal:
+            _read(_platinumTotal),
+        scoreEarned:
+            _read(_scoreEarned),
+        scoreTotal:
+            _read(_scoreTotal),
+      ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    final EdgeInsets viewInsets =
-        MediaQuery.viewInsetsOf(context);
-    final GameLibraryEntry game = widget.game;
+    final GamePlatform platform =
+        widget.profile.platform;
 
-    return Padding(
-      padding: EdgeInsets.only(bottom: viewInsets.bottom),
-      child: SafeArea(
-        top: false,
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(18, 14, 18, 24),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Center(
-                child: Container(
-                  width: 42,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: Colors.white24,
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 16),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _GameCover(
-                    game: game,
-                    width: 72,
-                    height: 102,
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'FICHE DU JEU',
-                          style: TextStyle(
-                            color: Color(0xffffc857),
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                            letterSpacing: 1.2,
-                          ),
-                        ),
-                        const SizedBox(height: 6),
-                        if (game.releaseYear != null)
-                          Text(
-                            'Sortie : ${game.releaseYear}',
-                            style: const TextStyle(
-                              color: Colors.white54,
-                            ),
-                          ),
-                        if (game.genres.isNotEmpty)
-                          Text(
-                            game.genres.join(' • '),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              color: Color(0xffcbb3e8),
-                              fontSize: 11,
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-              if (game.summary != null &&
-                  game.summary!.isNotEmpty) ...[
-                const SizedBox(height: 12),
-                Text(
-                  game.summary!,
-                  maxLines: 4,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Colors.white54,
-                    fontSize: 11,
-                    height: 1.35,
-                  ),
-                ),
-              ],
-              const SizedBox(height: 14),
-              TextField(
-                controller: _title,
-                style: const TextStyle(color: Colors.white),
-                decoration:
-                    const InputDecoration(labelText: 'Nom du jeu'),
-              ),
-              const SizedBox(height: 12),
-              DropdownButtonFormField<GamePlatform>(
-                initialValue: _platform,
-                dropdownColor: const Color(0xff23262a),
-                decoration:
-                    const InputDecoration(labelText: 'Plateforme'),
-                items: GamePlatform.values
-                    .map(
-                      (platform) =>
-                          DropdownMenuItem<GamePlatform>(
-                        value: platform,
-                        child: Text(platform.label),
-                      ),
-                    )
-                    .toList(),
-                onChanged: widget.game.source == GameSource.steam
-                    ? null
-                    : (value) {
-                        if (value != null) {
-                          setState(() {
-                            _platform = value;
-                          });
-                        }
-                      },
-              ),
-              const SizedBox(height: 12),
-              DropdownButtonFormField<GameStatus>(
-                initialValue: _status,
-                dropdownColor: const Color(0xff23262a),
-                decoration:
-                    const InputDecoration(labelText: 'État'),
-                items: GameStatus.values
-                    .map(
-                      (status) => DropdownMenuItem<GameStatus>(
-                        value: status,
-                        child: Text(status.label),
-                      ),
-                    )
-                    .toList(),
-                onChanged: (value) {
-                  if (value != null) {
-                    setState(() {
-                      _status = value;
-                      if (value == GameStatus.completed) {
-                        _progress = 100;
-                      }
-                    });
-                  }
-                },
-              ),
-              const SizedBox(height: 12),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text(
-                  'Favori',
-                  style: TextStyle(color: Colors.white),
-                ),
-                value: _favorite,
-                activeThumbColor: const Color(0xffffc857),
-                onChanged: (value) {
-                  setState(() {
-                    _favorite = value;
-                  });
-                },
-              ),
-              const SizedBox(height: 4),
-              Text(
-                'Progression personnelle : '
-                '${_progress.round()} %',
-                style: const TextStyle(color: Colors.white70),
-              ),
-              Slider(
-                value: _progress,
-                min: 0,
-                max: 100,
-                divisions: 100,
-                activeColor: const Color(0xffffc857),
-                onChanged: _status == GameStatus.completed
-                    ? null
-                    : (value) {
-                        setState(() {
-                          _progress = value;
-                        });
-                      },
-              ),
-              const Divider(color: Colors.white12, height: 28),
-              Text(
-                _platform == GamePlatform.playstation
-                    ? 'TROPHÉES PLAYSTATION'
-                    : _platform == GamePlatform.xbox
-                        ? 'SUCCÈS XBOX'
-                        : 'SUCCÈS '
-                            '${_platform.label.toUpperCase()}',
-                style: const TextStyle(
-                  color: Color(0xffb69bdc),
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 0.8,
-                ),
-              ),
-              const SizedBox(height: 12),
-              if (_platform == GamePlatform.playstation) ...[
-                _CountPair(
-                  label: 'Bronze',
-                  unlocked: _bronzeUnlocked,
-                  total: _bronzeTotal,
-                ),
-                _CountPair(
-                  label: 'Argent',
-                  unlocked: _silverUnlocked,
-                  total: _silverTotal,
-                ),
-                _CountPair(
-                  label: 'Or',
-                  unlocked: _goldUnlocked,
-                  total: _goldTotal,
-                ),
-                _CountPair(
-                  label: 'Platine',
-                  unlocked: _platinumUnlocked,
-                  total: _platinumTotal,
-                ),
-              ] else ...[
-                _CountPair(
-                  label: 'Succès',
-                  unlocked: _unlocked,
-                  total: _total,
-                ),
-                if (_platform == GamePlatform.xbox)
-                  _CountPair(
-                    label: 'Gamerscore',
-                    unlocked: _scoreEarned,
-                    total: _scoreTotal,
-                    unlockedHint: 'G obtenus',
-                    totalHint: 'G total',
-                  ),
-              ],
-              const SizedBox(height: 20),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: () {
-                        Navigator.pop(
-                          context,
-                          const _GameEditResult.delete(),
-                        );
-                      },
-                      icon: const Icon(Icons.delete_outline),
-                      label: const Text('RETIRER'),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: Colors.redAccent,
-                        side: const BorderSide(
-                          color: Colors.redAccent,
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    flex: 2,
-                    child: FilledButton.icon(
-                      onPressed: _save,
-                      icon: const Icon(Icons.save_outlined),
-                      label: const Text('ENREGISTRER'),
-                      style: FilledButton.styleFrom(
-                        backgroundColor:
-                            const Color(0xffffc857),
-                        foregroundColor:
-                            const Color(0xff21150e),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ],
+    return Column(
+      crossAxisAlignment:
+          CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Aucune liste détaillée synchronisée. Tu peux conserver une progression manuelle en attendant la connexion officielle de cette plateforme.',
+          style: TextStyle(
+            color: Colors.white38,
+            fontSize: 10.5,
+            height: 1.35,
           ),
         ),
-      ),
+        const SizedBox(height: 10),
+        if (platform ==
+            GamePlatform.playstation) ...[
+          _ManualCountRow(
+            label: 'Bronze',
+            unlocked: _bronzeUnlocked,
+            total: _bronzeTotal,
+            onChanged: _emit,
+          ),
+          _ManualCountRow(
+            label: 'Argent',
+            unlocked: _silverUnlocked,
+            total: _silverTotal,
+            onChanged: _emit,
+          ),
+          _ManualCountRow(
+            label: 'Or',
+            unlocked: _goldUnlocked,
+            total: _goldTotal,
+            onChanged: _emit,
+          ),
+          _ManualCountRow(
+            label: 'Platine',
+            unlocked: _platinumUnlocked,
+            total: _platinumTotal,
+            onChanged: _emit,
+          ),
+        ] else ...[
+          _ManualCountRow(
+            label: 'Succès',
+            unlocked: _unlocked,
+            total: _total,
+            onChanged: _emit,
+          ),
+          if (platform ==
+              GamePlatform.xbox)
+            _ManualCountRow(
+              label: 'Gamerscore',
+              unlocked: _scoreEarned,
+              total: _scoreTotal,
+              unlockedHint: 'G obtenus',
+              totalHint: 'G total',
+              onChanged: _emit,
+            ),
+        ],
+      ],
     );
   }
 }
 
-class _CountPair extends StatelessWidget {
+class _ManualCountRow
+    extends StatelessWidget {
   final String label;
   final TextEditingController unlocked;
   final TextEditingController total;
   final String unlockedHint;
   final String totalHint;
+  final VoidCallback onChanged;
 
-  const _CountPair({
+  const _ManualCountRow({
     required this.label,
     required this.unlocked,
     required this.total,
     this.unlockedHint = 'Obtenus',
     this.totalHint = 'Total',
+    required this.onChanged,
   });
 
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
+      padding:
+          const EdgeInsets.only(
+        bottom: 9,
+      ),
       child: Row(
         children: [
           SizedBox(
             width: 82,
             child: Text(
               label,
-              style: const TextStyle(
-                color: Colors.white70,
-                fontWeight: FontWeight.w600,
+              style:
+                  const TextStyle(
+                color:
+                    Colors.white70,
+                fontWeight:
+                    FontWeight.w600,
+                fontSize: 11,
               ),
             ),
           ),
           Expanded(
             child: TextField(
               controller: unlocked,
-              keyboardType: TextInputType.number,
-              style: const TextStyle(color: Colors.white),
-              decoration: InputDecoration(
-                labelText: unlockedHint,
+              keyboardType:
+                  TextInputType.number,
+              onChanged: (_) =>
+                  onChanged(),
+              style:
+                  const TextStyle(
+                color: Colors.white,
+              ),
+              decoration:
+                  InputDecoration(
+                labelText:
+                    unlockedHint,
                 isDense: true,
               ),
             ),
@@ -2016,9 +3574,16 @@ class _CountPair extends StatelessWidget {
           Expanded(
             child: TextField(
               controller: total,
-              keyboardType: TextInputType.number,
-              style: const TextStyle(color: Colors.white),
-              decoration: InputDecoration(
+              keyboardType:
+                  TextInputType.number,
+              onChanged: (_) =>
+                  onChanged(),
+              style:
+                  const TextStyle(
+                color: Colors.white,
+              ),
+              decoration:
+                  InputDecoration(
                 labelText: totalHint,
                 isDense: true,
               ),
@@ -2029,3 +3594,4 @@ class _CountPair extends StatelessWidget {
     );
   }
 }
+

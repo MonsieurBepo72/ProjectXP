@@ -5,10 +5,13 @@ import 'package:flutter/foundation.dart';
 import 'app_audio_service.dart';
 import 'app_notification_service.dart';
 import 'auth_service.dart';
+import 'cloud_data_sync_service.dart';
+import 'gaming_accounts_service.dart';
 import 'computer_settings_service.dart';
 import 'local_account_repair_service.dart';
 import 'push_device_token_service.dart';
 import 'supabase_service.dart';
+import 'steam_sync_service.dart';
 import 'tavern_profile_service.dart';
 
 class ProjectXpStartupService {
@@ -31,14 +34,11 @@ class ProjectXpStartupService {
       Completer<void>();
 
   final ValueNotifier<int> socialReadyRevision =
-      ValueNotifier<int>(
-    0,
-  );
+      ValueNotifier<int>(0);
 
   bool _socialReady = false;
 
-  bool get socialReady =>
-      _socialReady;
+  bool get socialReady => _socialReady;
 
   Future<void> get localReady =>
       _localReadyCompleter.future;
@@ -46,16 +46,8 @@ class ProjectXpStartupService {
   Future<void> get hallReady =>
       _hallReadyCompleter.future;
 
-  // ===========================================================================
-  // DÉMARRAGE GLOBAL
-  //
-  // Ce service est volontairement non bloquant :
-  // l'UI Project XP peut déjà s'afficher pendant que les services travaillent.
-  // ===========================================================================
-
   Future<void> start() {
-    return _startFuture ??=
-        _startInternal();
+    return _startFuture ??= _startInternal();
   }
 
   Future<void> _startInternal() async {
@@ -80,10 +72,15 @@ class ProjectXpStartupService {
     final Future<bool> firstSocialAttempt =
         _tryInitializeSocialSession();
 
-    // Notifications :
-    // on les initialise tôt, mais sans empêcher l'écran de démarrage d'avancer.
-    //
-    // Firebase est déjà prêt avant runApp().
+    // Les liens de retour navigateur (Steam aujourd'hui, autres plateformes
+    // demain) sont préparés très tôt, sans retarder l'affichage du Hall.
+    unawaited(
+      _safeStep(
+        'Liens comptes gaming',
+        GamingAccountsService.initialize,
+      ),
+    );
+
     final Future<void> notificationFuture =
         settingsFuture.then(
       (_) => _safeStep(
@@ -92,8 +89,6 @@ class ProjectXpStartupService {
       ),
     );
 
-    // Les opérations purement locales doivent être prêtes avant que le Splash
-    // décide entre Auth / Avatar / Hall.
     await Future.wait<void>(
       <Future<void>>[
         authFuture,
@@ -105,16 +100,9 @@ class ProjectXpStartupService {
       _localReadyCompleter.complete();
     }
 
-    // Le Hall n'attend jamais indéfiniment le réseau.
-    //
-    // Sur une bonne connexion, la session Supabase sera déjà prête.
-    // Sur un réseau lent / absent, on donne seulement ~2,2 s au premier essai
-    // puis on ouvre quand même Project XP en mode dégradé.
     await Future.any<void>(
       <Future<void>>[
-        firstSocialAttempt.then(
-          (_) {},
-        ),
+        firstSocialAttempt.then((_) {}),
         Future<void>.delayed(
           _hallNetworkBudget,
         ),
@@ -125,7 +113,6 @@ class ProjectXpStartupService {
       _hallReadyCompleter.complete();
     }
 
-    // Tout ce qui suit continue en arrière-plan.
     unawaited(
       _finishDeferredStartup(
         authFuture: authFuture,
@@ -142,8 +129,6 @@ class ProjectXpStartupService {
     required Future<void> notificationFuture,
     required Future<bool> firstSocialAttempt,
   }) async {
-    // Anciennes migrations / réparations :
-    // utiles, mais elles ne doivent plus retarder l'apparition de l'interface.
     await authFuture;
 
     unawaited(
@@ -153,38 +138,23 @@ class ProjectXpStartupService {
       ),
     );
 
-    // L'audio et les notifications peuvent finir tranquillement.
-    unawaited(
-      audioFuture,
-    );
-
-    unawaited(
-      notificationFuture,
-    );
+    unawaited(audioFuture);
+    unawaited(notificationFuture);
 
     bool socialReady =
         await firstSocialAttempt;
 
     if (!socialReady) {
-      // Réessais espacés pour les connexions lentes / mobiles instables.
       const List<Duration> retryDelays =
           <Duration>[
-        Duration(
-          seconds: 3,
-        ),
-        Duration(
-          seconds: 8,
-        ),
-        Duration(
-          seconds: 18,
-        ),
+        Duration(seconds: 3),
+        Duration(seconds: 8),
+        Duration(seconds: 18),
       ];
 
       for (final Duration delay
           in retryDelays) {
-        await Future<void>.delayed(
-          delay,
-        );
+        await Future<void>.delayed(delay);
 
         socialReady =
             await _tryInitializeSocialSession();
@@ -199,10 +169,23 @@ class ProjectXpStartupService {
       return;
     }
 
-    // Les notifications ont besoin de la session Supabase pour enregistrer
-    // correctement le token de cette installation.
-    await notificationFuture;
+    // V1.10 : si le compte Supabase est permanent, on restaure / migre les
+    // données personnelles en arrière-plan AVANT de republier le profil social.
+    await _safeStep(
+      'Données Cloud Project XP',
+      CloudDataSyncService.syncCurrentAccount,
+    );
 
+    // La synchronisation gaming démarre en arrière-plan une fois la
+    // Bibliothèque Cloud restaurée. Elle ne fait jamais attendre le Hall.
+    unawaited(
+      _safeStep(
+        'Synchronisation gaming',
+        SteamSyncService.syncAtStartup,
+      ),
+    );
+
+    await notificationFuture;
     await _refreshPushTokenRegistration();
 
     await _safeStep(
@@ -210,10 +193,6 @@ class ProjectXpStartupService {
       _syncTavernProfile,
     );
   }
-
-  // ===========================================================================
-  // SESSION SOCIALE
-  // ===========================================================================
 
   Future<bool> _tryInitializeSocialSession() async {
     if (_socialReady) {
@@ -248,14 +227,9 @@ class ProjectXpStartupService {
     }
 
     _socialReady = true;
-
     socialReadyRevision.value =
         socialReadyRevision.value + 1;
   }
-
-  // ===========================================================================
-  // PUSH
-  // ===========================================================================
 
   Future<void> _refreshPushTokenRegistration() async {
     try {
@@ -281,10 +255,6 @@ class ProjectXpStartupService {
     }
   }
 
-  // ===========================================================================
-  // PROFIL
-  // ===========================================================================
-
   Future<void> _syncTavernProfile() async {
     final bool profileSynced =
         await TavernProfileService.syncCurrentProfile();
@@ -293,10 +263,6 @@ class ProjectXpStartupService {
       'Profil Taverne synchronisé : $profileSynced',
     );
   }
-
-  // ===========================================================================
-  // OUTIL DE SÉCURITÉ
-  // ===========================================================================
 
   Future<void> _safeStep(
     String name,
