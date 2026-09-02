@@ -1479,19 +1479,6 @@ class _TeamDetailsScreenState
           overflow:
               TextOverflow.ellipsis,
         ),
-        actions: [
-          if (isOwner)
-            IconButton(
-              onPressed:
-                  _editTeam,
-              tooltip:
-                  'Modifier l’équipe',
-              icon:
-                  const Icon(
-                Icons.edit,
-              ),
-            ),
-        ],
       ),
       body: SafeArea(
         child: RefreshIndicator(
@@ -1782,7 +1769,7 @@ class _TeamDetailsScreenState
                         const SizedBox(width: 9),
                         Expanded(
                           child: Text(
-                            '$_pendingJoinRequestCount demande(s) à traiter • ' 
+                            '$_pendingJoinRequestCount demande(s) à traiter • '
                             '$_pendingInvitationCount invitation(s) en attente',
                             style: const TextStyle(
                               color: Colors.white60,
@@ -2577,4 +2564,3 @@ class _MemberAvatar
     );
   }
 }
-

@@ -9,11 +9,6 @@ class AvatarRenderer extends StatelessWidget {
   final AvatarModel avatar;
   final double size;
   final bool showFrame;
-
-  /// Pour les mini-avatars (Compagnie / demandes), évite le masque de tête ovale
-  /// et utilise un recadrage rectangulaire transparent.
-  ///
-  /// Le rendu normal du Profil reste inchangé.
   final bool compactHeadCrop;
 
   const AvatarRenderer({
@@ -28,20 +23,38 @@ class AvatarRenderer extends StatelessWidget {
   Widget build(BuildContext context) {
     final Widget content;
 
+    final String generatedPath =
+        avatar.generatedImagePath?.trim() ?? '';
+
     if (avatar.creationMode == AvatarCreationMode.photo &&
-        avatar.generatedImagePath != null &&
-        avatar.generatedImagePath!.isNotEmpty) {
-      content = Image.file(
-        File(avatar.generatedImagePath!),
-        fit: BoxFit.contain,
-        errorBuilder: (
-          context,
-          error,
-          stackTrace,
-        ) {
-          return _buildManualAvatar();
-        },
-      );
+        generatedPath.isNotEmpty) {
+      if (generatedPath.startsWith('http://') ||
+          generatedPath.startsWith('https://')) {
+        content = Image.network(
+          generatedPath,
+          fit: BoxFit.contain,
+          filterQuality: FilterQuality.high,
+          errorBuilder: (
+            context,
+            error,
+            stackTrace,
+          ) {
+            return _buildManualAvatar();
+          },
+        );
+      } else {
+        content = Image.file(
+          File(generatedPath),
+          fit: BoxFit.contain,
+          errorBuilder: (
+            context,
+            error,
+            stackTrace,
+          ) {
+            return _buildManualAvatar();
+          },
+        );
+      }
     } else {
       content = _buildManualAvatar();
     }
@@ -110,16 +123,6 @@ class AvatarRenderer extends StatelessWidget {
           fit: StackFit.expand,
           clipBehavior: Clip.hardEdge,
           children: [
-            // ================================================================
-            // 1. TÊTE / COU UNIQUEMENT
-            //
-            // Les tenues de ton ZIP sont déjà des personnages habillés
-            // presque complets. Si on affiche le corps entier derrière,
-            // les anciens bras et jambes ressortent sur les côtés.
-            //
-            // On ne conserve donc que la tête et le cou du body_xx.
-            // ================================================================
-
             if (compactHeadCrop)
               ClipRect(
                 clipper:
@@ -161,49 +164,29 @@ class AvatarRenderer extends StatelessWidget {
                 ),
               ),
 
-            // ================================================================
-            // 2. TENUE RECALÉE
-            // ================================================================
-
             _positionedOutfit(
               spec: outfit,
               canvasWidth: canvasWidth,
               canvasHeight: canvasHeight,
             ),
 
-            // ================================================================
-            // 3. CHEVEUX
-            // ================================================================
+            _positionedSquareLayer(
+              spec: hair,
+              canvasWidth: canvasWidth,
+              canvasHeight: canvasHeight,
+            ),
 
-              _positionedSquareLayer(
-                spec: hair,
-                canvasWidth: canvasWidth,
-                canvasHeight: canvasHeight,
-              ),
+            _positionedSquareLayer(
+              spec: beard,
+              canvasWidth: canvasWidth,
+              canvasHeight: canvasHeight,
+            ),
 
-            // ================================================================
-            // 4. BARBE
-            // ================================================================
-
-              _positionedSquareLayer(
-                spec: beard,
-                canvasWidth: canvasWidth,
-                canvasHeight: canvasHeight,
-              ),
-
-            // ================================================================
-            // 5. LUNETTES
-            // ================================================================
-
-              _positionedSquareLayer(
-                spec: glasses,
-                canvasWidth: canvasWidth,
-                canvasHeight: canvasHeight,
-              ),
-
-            // ================================================================
-            // 6. ACCESSOIRE
-            // ================================================================
+            _positionedSquareLayer(
+              spec: glasses,
+              canvasWidth: canvasWidth,
+              canvasHeight: canvasHeight,
+            ),
 
             if (accessory != null)
               _positionedSquareLayer(
@@ -271,14 +254,6 @@ class AvatarRenderer extends StatelessWidget {
   }
 }
 
-
-// ============================================================================
-// RECADRAGE TÊTE + COU POUR MINI-AVATARS
-//
-// Contrairement à _AvatarHeadClipper, ce crop ne dessine PAS d'ovale.
-// Les pixels transparents du PNG restent transparents.
-// ============================================================================
-
 class _AvatarHeadRectClipper
     extends CustomClipper<Rect> {
   const _AvatarHeadRectClipper();
@@ -303,10 +278,6 @@ class _AvatarHeadRectClipper
   }
 }
 
-// ============================================================================
-// MASQUE TÊTE + COU
-// ============================================================================
-
 class _AvatarHeadClipper
     extends CustomClipper<Path> {
   const _AvatarHeadClipper();
@@ -315,7 +286,6 @@ class _AvatarHeadClipper
   Path getClip(
     Size size,
   ) {
-    // Mesuré à partir de ton vrai gabarit 1024 x 1536.
     final Rect head = Rect.fromLTRB(
       size.width * 0.293,
       size.height * 0.029,

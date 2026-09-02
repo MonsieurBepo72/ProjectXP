@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:battery_plus/battery_plus.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
@@ -8,11 +10,14 @@ import 'package:flutter/services.dart';
 
 import '../services/device_status_service.dart';
 import '../services/friend_service.dart';
+import '../services/notification_center_service.dart';
+import '../services/phone_wallpaper_service.dart';
 import '../services/private_message_service.dart';
 import '../services/project_xp_communicator_ui_service.dart';
 import 'friend_requests_screen.dart';
 import 'friends_screen.dart';
 import 'messages_screen.dart';
+import 'notification_center_screen.dart';
 
 class PhoneHomeScreen extends StatefulWidget {
   const PhoneHomeScreen({
@@ -75,6 +80,9 @@ class _PhoneHomeScreenState
   StreamSubscription<BluetoothAdapterState>?
       _bluetoothStateSubscription;
 
+  StreamSubscription<int>?
+      _notificationCenterCountSubscription;
+
   DateTime _now =
       DateTime.now();
 
@@ -93,6 +101,13 @@ class _PhoneHomeScreenState
       DeviceStatusSnapshot.unsupported(
     platform: 'android',
   );
+
+  int _notificationCenterUnreadCount = 0;
+
+  String? _wallpaperPath;
+  bool _wallpaperActionInProgress = false;
+  _WallpaperPalette _wallpaperPalette =
+      _WallpaperPalette.projectXp;
 
   @override
   void initState() {
@@ -120,6 +135,15 @@ class _PhoneHomeScreenState
     _initializeConnectivity();
     _initializeBluetooth();
     _initializeDeviceStatus();
+    unawaited(
+      _refreshNotificationCenterCount(),
+    );
+
+    _bindNotificationCenterCounter();
+
+    unawaited(
+      _loadWallpaper(),
+    );
   }
 
   @override
@@ -178,15 +202,22 @@ class _PhoneHomeScreenState
         .setCommunicatorSessionActive(
       true,
     );
+
+    unawaited(
+      _refreshNotificationCenterCount(),
+    );
   }
 
   @override
   void didPushNext() {
-    _releaseGlobalCommunicatorAlert();
+    // Les écrans Messages / Amis / Demandes / Notifications font toujours
+    // partie du Communicateur XP. On garde donc le téléphone global masqué :
+    // afficher un autre téléphone au-dessus du téléphone serait redondant.
+    _suppressGlobalCommunicatorAlert();
 
     ProjectXpCommunicatorUiService
         .setCommunicatorSessionActive(
-      false,
+      true,
     );
   }
 
@@ -216,6 +247,7 @@ class _PhoneHomeScreenState
     _batteryStateSubscription?.cancel();
     _connectivitySubscription?.cancel();
     _bluetoothStateSubscription?.cancel();
+    _notificationCenterCountSubscription?.cancel();
 
     // Dès que le Communicateur XP est rangé, Android/iOS reprend
     // immédiatement le contrôle de sa vraie barre système.
@@ -243,6 +275,9 @@ class _PhoneHomeScreenState
       _refreshConnectivity();
       _refreshBluetooth();
       _refreshDeviceStatus();
+      unawaited(
+        _refreshNotificationCenterCount(),
+      );
 
       final ModalRoute<dynamic>? route =
           ModalRoute.of(context);
@@ -886,14 +921,409 @@ class _PhoneHomeScreenState
     );
   }
 
-  void _openNotifications() {
-    ScaffoldMessenger.of(context)
-        .showSnackBar(
-      const SnackBar(
-        content: Text(
-          'Le centre de notifications arrive à l’étape suivante.',
+  Future<void> _openNotifications() async {
+    await _openPhoneApp(
+      const NotificationCenterScreen(),
+    );
+
+    if (!mounted) {
+      return;
+    }
+
+    await _refreshNotificationCenterCount();
+  }
+
+  Future<void> _refreshNotificationCenterCount() async {
+    final int count =
+        await NotificationCenterService.unreadCount();
+
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _notificationCenterUnreadCount =
+          count < 0 ? 0 : count;
+    });
+  }
+
+  void _bindNotificationCenterCounter() {
+    _notificationCenterCountSubscription?.cancel();
+
+    _notificationCenterCountSubscription =
+        NotificationCenterService
+            .unreadCountStream()
+            .listen(
+      (int count) {
+        if (!mounted) {
+          return;
+        }
+
+        setState(() {
+          _notificationCenterUnreadCount =
+              count < 0 ? 0 : count;
+        });
+      },
+      onError: (Object error) {
+        debugPrint(
+          'Compteur Notifications du Communicateur indisponible : $error',
+        );
+      },
+    );
+  }
+
+  Future<void> _loadWallpaper() async {
+    final String? path =
+        await PhoneWallpaperService
+            .loadCurrentWallpaperPath();
+
+    final _WallpaperPalette palette =
+        await _deriveWallpaperPalette(path);
+
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _wallpaperPath = path;
+      _wallpaperPalette = palette;
+    });
+  }
+
+  Future<_WallpaperPalette> _deriveWallpaperPalette(
+    String? path,
+  ) async {
+    if (path == null || path.isEmpty) {
+      return _WallpaperPalette.projectXp;
+    }
+
+    try {
+      final File file = File(path);
+
+      if (!await file.exists()) {
+        return _WallpaperPalette.projectXp;
+      }
+
+      final ui.Codec codec =
+          await ui.instantiateImageCodec(
+        await file.readAsBytes(),
+        targetWidth: 48,
+        targetHeight: 48,
+      );
+
+      final ui.FrameInfo frame =
+          await codec.getNextFrame();
+
+      final ByteData? data =
+          await frame.image.toByteData(
+        format: ui.ImageByteFormat.rawRgba,
+      );
+
+      frame.image.dispose();
+      codec.dispose();
+
+      if (data == null) {
+        return _WallpaperPalette.projectXp;
+      }
+
+      final Uint8List bytes =
+          data.buffer.asUint8List();
+
+      int red = 0;
+      int green = 0;
+      int blue = 0;
+      int samples = 0;
+
+      for (int index = 0;
+          index + 3 < bytes.length;
+          index += 4) {
+        final int alpha = bytes[index + 3];
+
+        if (alpha < 40) {
+          continue;
+        }
+
+        red += bytes[index];
+        green += bytes[index + 1];
+        blue += bytes[index + 2];
+        samples++;
+      }
+
+      if (samples == 0) {
+        return _WallpaperPalette.projectXp;
+      }
+
+      final Color average = Color.fromARGB(
+        255,
+        red ~/ samples,
+        green ~/ samples,
+        blue ~/ samples,
+      );
+
+      return _WallpaperPalette.fromAverage(
+        average,
+      );
+    } catch (_) {
+      return _WallpaperPalette.projectXp;
+    }
+  }
+
+  Future<void> _openWallpaperSettings() async {
+    if (_wallpaperActionInProgress) {
+      return;
+    }
+
+    final String? action =
+        await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor:
+          const Color(0xff21150e),
+      shape:
+          const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(
+          top: Radius.circular(24),
         ),
       ),
+      builder: (BuildContext sheetContext) {
+        return SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(
+              18,
+              14,
+              18,
+              24,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 44,
+                  height: 5,
+                  decoration: BoxDecoration(
+                    color: Colors.white24,
+                    borderRadius:
+                        BorderRadius.circular(999),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  'FOND D’ÉCRAN',
+                  style: TextStyle(
+                    color: Color(0xffffd27a),
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 1.2,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Personnalise ton Communicateur XP avec une image de ta galerie.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Colors.white60,
+                    fontSize: 12,
+                    height: 1.35,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                ListTile(
+                  leading: const Icon(
+                    Icons.photo_library_rounded,
+                    color: Color(0xffffd27a),
+                  ),
+                  title: const Text(
+                    'Choisir une image',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  subtitle: const Text(
+                    'Galerie du téléphone',
+                    style: TextStyle(
+                      color: Colors.white38,
+                    ),
+                  ),
+                  onTap: () {
+                    Navigator.pop(
+                      sheetContext,
+                      'pick',
+                    );
+                  },
+                ),
+                if (_wallpaperPath != null)
+                  ListTile(
+                    leading: const Icon(
+                      Icons.restart_alt_rounded,
+                      color: Colors.white70,
+                    ),
+                    title: const Text(
+                      'Fond Project XP',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    subtitle: const Text(
+                      'Revenir au fond par défaut',
+                      style: TextStyle(
+                        color: Colors.white38,
+                      ),
+                    ),
+                    onTap: () {
+                      Navigator.pop(
+                        sheetContext,
+                        'reset',
+                      );
+                    },
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+
+    if (action == null || !mounted) {
+      return;
+    }
+
+    setState(() {
+      _wallpaperActionInProgress = true;
+    });
+
+    try {
+      if (action == 'pick') {
+        final String? path =
+            await PhoneWallpaperService
+                .pickAndSaveCurrentWallpaper();
+
+        if (!mounted || path == null) {
+          return;
+        }
+
+        final _WallpaperPalette palette =
+            await _deriveWallpaperPalette(path);
+
+        if (!mounted) {
+          return;
+        }
+
+        setState(() {
+          _wallpaperPath = path;
+          _wallpaperPalette = palette;
+        });
+
+        _showWallpaperMessage(
+          'Fond d’écran du Communicateur mis à jour.',
+        );
+      } else if (action == 'reset') {
+        await PhoneWallpaperService
+            .clearCurrentWallpaper();
+
+        if (!mounted) {
+          return;
+        }
+
+        setState(() {
+          _wallpaperPath = null;
+          _wallpaperPalette =
+              _WallpaperPalette.projectXp;
+        });
+
+        _showWallpaperMessage(
+          'Fond Project XP restauré.',
+        );
+      }
+    } catch (_) {
+      _showWallpaperMessage(
+        'Impossible de modifier le fond d’écran pour le moment.',
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _wallpaperActionInProgress = false;
+        });
+      }
+    }
+  }
+
+  void _showWallpaperMessage(
+    String message,
+  ) {
+    if (!mounted) {
+      return;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+      ),
+    );
+  }
+
+  Widget _buildPhoneBackground() {
+    final String? path =
+        _wallpaperPath;
+
+    if (path == null || path.isEmpty) {
+      return const DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: <Color>[
+              Color(0xff21150e),
+              Color(0xff130c08),
+              Color(0xff090605),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final File file = File(path);
+
+    if (!file.existsSync()) {
+      return const DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: <Color>[
+              Color(0xff21150e),
+              Color(0xff130c08),
+              Color(0xff090605),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        Image.file(
+          file,
+          fit: BoxFit.cover,
+          filterQuality: FilterQuality.high,
+          gaplessPlayback: true,
+        ),
+        const DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: <Color>[
+                Color(0x99000000),
+                Color(0x66000000),
+                Color(0xaa000000),
+              ],
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -910,30 +1340,12 @@ class _PhoneHomeScreenState
           const Color(
         0xff100a07,
       ),
-      body: Container(
-        decoration:
-            const BoxDecoration(
-          gradient:
-              LinearGradient(
-            begin:
-                Alignment.topCenter,
-            end:
-                Alignment.bottomCenter,
-            colors: <Color>[
-              Color(
-                0xff21150e,
-              ),
-              Color(
-                0xff130c08,
-              ),
-              Color(
-                0xff090605,
-              ),
-            ],
-          ),
-        ),
-        child: SafeArea(
-          child: Column(
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          _buildPhoneBackground(),
+          SafeArea(
+            child: Column(
             children: [
               _buildStatusBar(),
               _buildTopNavigation(),
@@ -991,9 +1403,10 @@ class _PhoneHomeScreenState
               ),
 
               _buildBottomBar(),
-            ],
+              ],
+            ),
           ),
-        ),
+        ],
       ),
     );
   }
@@ -1186,8 +1599,15 @@ class _PhoneHomeScreenState
 
           const Spacer(),
 
-          const SizedBox(
-            width: 48,
+          IconButton(
+            tooltip: 'Fond d’écran',
+            onPressed: _wallpaperActionInProgress
+                ? null
+                : _openWallpaperSettings,
+            icon: const Icon(
+              Icons.wallpaper_rounded,
+              color: Colors.white70,
+            ),
           ),
         ],
       ),
@@ -1283,6 +1703,8 @@ class _PhoneHomeScreenState
                   snapshot.data ?? 0,
               onTap:
                   _openMessages,
+              palette:
+                  _wallpaperPalette,
             );
           },
         ),
@@ -1304,6 +1726,8 @@ class _PhoneHomeScreenState
                   snapshot.data ?? 0,
               onTap:
                   _openFriendRequests,
+              palette:
+                  _wallpaperPalette,
             );
           },
         ),
@@ -1314,14 +1738,20 @@ class _PhoneHomeScreenState
               Icons.people_alt_rounded,
           onTap:
               _openFriends,
+          palette:
+              _wallpaperPalette,
         ),
 
         _PhoneAppIcon(
           label: 'Notifications',
           icon:
               Icons.notifications_rounded,
+          badgeCount:
+              _notificationCenterUnreadCount,
           onTap:
               _openNotifications,
+          palette:
+              _wallpaperPalette,
         ),
       ],
     );
@@ -1418,6 +1848,68 @@ class _PhoneHomeScreenState
 
 }
 
+class _WallpaperPalette {
+  const _WallpaperPalette({
+    required this.tileColor,
+    required this.borderColor,
+    required this.iconColor,
+    required this.labelColor,
+    required this.badgeBorderColor,
+  });
+
+  final Color tileColor;
+  final Color borderColor;
+  final Color iconColor;
+  final Color labelColor;
+  final Color badgeBorderColor;
+
+  static const _WallpaperPalette projectXp =
+      _WallpaperPalette(
+    tileColor: Color(0xff2c1c13),
+    borderColor: Color(0xff6a4327),
+    iconColor: Color(0xffffd27a),
+    labelColor: Colors.white,
+    badgeBorderColor: Color(0xff130c08),
+  );
+
+  factory _WallpaperPalette.fromAverage(
+    Color average,
+  ) {
+    final bool isLight =
+        average.computeLuminance() >= 0.52;
+
+    final Color tile = Color.lerp(
+          average,
+          isLight ? Colors.white : Colors.black,
+          isLight ? 0.66 : 0.52,
+        ) ??
+        average;
+
+    final Color icon = Color.lerp(
+          average,
+          isLight ? Colors.black : Colors.white,
+          isLight ? 0.78 : 0.82,
+        ) ??
+        (isLight ? Colors.black : Colors.white);
+
+    final Color border = Color.lerp(
+          average,
+          isLight ? Colors.black : Colors.white,
+          isLight ? 0.28 : 0.34,
+        ) ??
+        icon;
+
+    return _WallpaperPalette(
+      tileColor: tile.withValues(alpha: 0.86),
+      borderColor: border.withValues(alpha: 0.72),
+      iconColor: icon,
+      labelColor: Colors.white,
+      badgeBorderColor:
+          isLight ? Colors.white : Colors.black,
+    );
+  }
+}
+
 // =============================================================================
 // ICÔNE D'APPLICATION
 // =============================================================================
@@ -1427,6 +1919,7 @@ class _PhoneAppIcon extends StatelessWidget {
     required this.label,
     required this.icon,
     required this.onTap,
+    required this.palette,
     this.badgeCount = 0,
   });
 
@@ -1435,6 +1928,8 @@ class _PhoneAppIcon extends StatelessWidget {
   final IconData icon;
 
   final VoidCallback onTap;
+
+  final _WallpaperPalette palette;
 
   final int badgeCount;
 
@@ -1467,9 +1962,7 @@ class _PhoneAppIcon extends StatelessWidget {
                   decoration:
                       BoxDecoration(
                     color:
-                        const Color(
-                      0xff2c1c13,
-                    ),
+                        palette.tileColor,
                     borderRadius:
                         BorderRadius.circular(
                       22,
@@ -1477,9 +1970,7 @@ class _PhoneAppIcon extends StatelessWidget {
                     border:
                         Border.all(
                       color:
-                          const Color(
-                        0xff6a4327,
-                      ),
+                          palette.borderColor,
                     ),
                     boxShadow:
                         const <BoxShadow>[
@@ -1499,9 +1990,7 @@ class _PhoneAppIcon extends StatelessWidget {
                   child: Icon(
                     icon,
                     color:
-                        const Color(
-                      0xffffd27a,
-                    ),
+                        palette.iconColor,
                     size: 35,
                   ),
                 ),
@@ -1536,9 +2025,7 @@ class _PhoneAppIcon extends StatelessWidget {
                         border:
                             Border.all(
                           color:
-                              const Color(
-                            0xff130c08,
-                          ),
+                              palette.badgeBorderColor,
                           width: 2,
                         ),
                       ),
@@ -1576,12 +2063,19 @@ class _PhoneAppIcon extends StatelessWidget {
               textAlign:
                   TextAlign.center,
               style:
-                  const TextStyle(
+                  TextStyle(
                 color:
-                    Colors.white,
+                    palette.labelColor,
                 fontSize: 12,
                 fontWeight:
-                    FontWeight.w600,
+                    FontWeight.w700,
+                shadows:
+                    const <Shadow>[
+                  Shadow(
+                    color: Colors.black87,
+                    blurRadius: 5,
+                  ),
+                ],
               ),
             ),
           ],

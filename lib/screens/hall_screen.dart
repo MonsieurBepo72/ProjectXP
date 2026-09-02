@@ -6,10 +6,9 @@ import 'package:flutter/services.dart';
 
 import '../services/app_audio_service.dart';
 import '../services/auth_service.dart';
-import '../services/compagnie_invitation_storage.dart';
 import '../services/compagnie_request_notification_sync.dart';
-import '../services/compagnie_request_storage.dart';
 import '../services/friend_service.dart';
+import '../services/notification_center_service.dart';
 import '../services/private_message_service.dart';
 import '../services/online_presence_service.dart';
 import '../services/project_xp_communicator_ui_service.dart';
@@ -122,7 +121,7 @@ class _HallScreenState extends State<HallScreen>
   // NOTIFICATIONS / TÉLÉPHONE
   // ===========================================================================
 
-  int _pendingCompagnieActivityCount = 0;
+  int _notificationCenterUnreadCount = 0;
   int _unreadPrivateMessageCount = 0;
   int _incomingFriendRequestCount = 0;
 
@@ -132,8 +131,11 @@ class _HallScreenState extends State<HallScreen>
   StreamSubscription<int>?
       _friendRequestCountSubscription;
 
+  StreamSubscription<int>?
+      _notificationCenterCountSubscription;
+
   int get _unreadNotificationCount {
-    return _pendingCompagnieActivityCount +
+    return _notificationCenterUnreadCount +
         _unreadPrivateMessageCount +
         _incomingFriendRequestCount;
   }
@@ -304,6 +306,7 @@ class _HallScreenState extends State<HallScreen>
 
     _privateMessageUnreadSubscription?.cancel();
     _friendRequestCountSubscription?.cancel();
+    _notificationCenterCountSubscription?.cancel();
 
     unawaited(
       OnlinePresenceService.instance.stop(),
@@ -336,6 +339,7 @@ class _HallScreenState extends State<HallScreen>
   void _startPhoneRealtimeCounters() {
     _privateMessageUnreadSubscription?.cancel();
     _friendRequestCountSubscription?.cancel();
+    _notificationCenterCountSubscription?.cancel();
 
     _privateMessageUnreadSubscription =
         PrivateMessageService
@@ -383,6 +387,31 @@ class _HallScreenState extends State<HallScreen>
       ) {
         debugPrint(
           'Compteur demandes d’amis du Hall indisponible : $error',
+        );
+      },
+    );
+
+    _notificationCenterCountSubscription =
+        NotificationCenterService
+            .unreadCountStream()
+            .listen(
+      (
+        int count,
+      ) {
+        if (!mounted) {
+          return;
+        }
+
+        setState(() {
+          _notificationCenterUnreadCount =
+              count < 0 ? 0 : count;
+        });
+      },
+      onError: (
+        Object error,
+      ) {
+        debugPrint(
+          'Compteur Notifications du Hall indisponible : $error',
         );
       },
     );
@@ -1156,7 +1185,7 @@ class _HallScreenState extends State<HallScreen>
         }
 
         setState(() {
-          _pendingCompagnieActivityCount = 0;
+          _notificationCenterUnreadCount = 0;
         });
 
         return;
@@ -1165,26 +1194,19 @@ class _HallScreenState extends State<HallScreen>
       await CompagnieRequestNotificationSync
           .syncForCurrentUser();
 
-      final requests =
-          await CompagnieRequestStorage
-              .pendingIncomingForUser(
-        userId.trim(),
-      );
-
-      final invitations =
-          await CompagnieInvitationStorage
-              .pendingIncomingForUser(
-        userId.trim(),
-      );
+      final int notificationCount =
+          await NotificationCenterService
+              .unreadCount();
 
       if (!mounted) {
         return;
       }
 
       setState(() {
-        _pendingCompagnieActivityCount =
-            requests.length +
-                invitations.length;
+        _notificationCenterUnreadCount =
+            notificationCount < 0
+                ? 0
+                : notificationCount;
       });
     } catch (_) {
       if (!mounted) {
@@ -1192,7 +1214,7 @@ class _HallScreenState extends State<HallScreen>
       }
 
       setState(() {
-        _pendingCompagnieActivityCount = 0;
+        _notificationCenterUnreadCount = 0;
       });
     }
   }

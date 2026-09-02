@@ -15,6 +15,7 @@ import '../services/supabase_service.dart';
 import '../services/tavern_profile_service.dart';
 import '../services/tavern_service.dart';
 import '../widgets/avatar_renderer.dart';
+import '../widgets/hall_home_button.dart';
 
 class TavernScreen extends StatefulWidget {
   const TavernScreen({
@@ -28,7 +29,7 @@ class TavernScreen extends StatefulWidget {
 class _TavernScreenState extends State<TavernScreen> {
 
   // ===========================================================================
-  // TAVERNE V8.1.6 — HEADER ÉQUILIBRÉ + COMPOSER
+  // TAVERNE V8.2.1 — NAVIGATION HALL COHÉRENTE
   // ===========================================================================
   //
   // Le décor lourd est maintenant porté par des images dédiées : header,
@@ -1195,17 +1196,22 @@ class _TavernScreenState extends State<TavernScreen> {
             .clamp(420, 1180)
             .toInt();
 
-        // Le Communicateur global occupe 48 x 42 à systemTop + 11 / right 8.
-        // Les deux actions locales sont centrées exactement sur ce même axe.
-        final double phoneTop = systemTop + 11.0;
+        // Le Communicateur global occupe 48 x 42 à systemTop + 7 / right 8
+        // (voir global_communicator_alert.dart). La flèche et la palette
+        // utilisent exactement le même axe vertical.
+        final double phoneTop = systemTop + 7.0;
         const double phoneHeight = 42.0;
         const double phoneWidth = 48.0;
         const double phoneRight = 8.0;
         final double phoneReserve = phoneWidth + phoneRight;
 
-        const double backSize = 42.0;
+        // Même bouton Hall que Compagnie, Terminal XP et Communicateur.
+        // Sa zone visuelle reste identique partout : 44 × 40.
+        const double hallButtonWidth = 44.0;
+        const double hallButtonHeight = 40.0;
         final double backLeft = width < 340 ? 7.0 : 10.0;
-        final double backTop = phoneTop;
+        final double backTop =
+            phoneTop + ((phoneHeight - hallButtonHeight) / 2);
 
         final double paletteSize = width < 340 ? 28.0 : 30.0;
         final double paletteTop = phoneTop + ((phoneHeight - paletteSize) / 2);
@@ -1245,45 +1251,24 @@ class _TavernScreenState extends State<TavernScreen> {
                 ),
               ),
 
-              // Retour au Hall : aucune plaque Flutter ni cache visuel.
-              // La zone tactile est invisible et partage exactement le même
-              // top/hauteur que le Communicateur global.
+              // Grand espace directement ouvert depuis le Hall : on utilise
+              // l'icône Hall, jamais la flèche réservée aux retours internes.
+              // Le bouton opaque recouvre proprement l'ancienne plaque du décor.
               Positioned(
                 left: backLeft,
                 top: backTop,
-                width: backSize,
-                height: backSize,
-                child: Tooltip(
-                  message: 'Retour au Hall',
-                  child: Semantics(
-                    button: true,
-                    label: 'Retour au Hall',
-                    child: GestureDetector(
-                      behavior: HitTestBehavior.translucent,
-                      onTap: () => Navigator.pop(context),
-                      child: const Center(
-                        child: Icon(
-                          Icons.arrow_back_ios_new_rounded,
-                          color: Color(0xffe1b96e),
-                          size: 21,
-                          shadows: [
-                            Shadow(
-                              color: Color(0xee000000),
-                              blurRadius: 4,
-                              offset: Offset(0, 1),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
+                width: hallButtonWidth,
+                height: hallButtonHeight,
+                child: HallHomeButton(
+                  width: hallButtonWidth,
+                  height: hallButtonHeight,
                 ),
               ),
 
               if (_isProjectXpAdmin)
                 Positioned(
-                  left: backLeft + backSize + 2.0,
-                  top: backTop + ((backSize - 28) / 2),
+                  left: backLeft + hallButtonWidth + 2.0,
+                  top: backTop + ((hallButtonHeight - 28) / 2),
                   child: SizedBox(
                     width: 28,
                     height: 28,
@@ -1395,16 +1380,16 @@ class _TavernScreenState extends State<TavernScreen> {
           child: DecoratedBox(
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: const Color(0xe51a100b),
+              color: Colors.transparent,
               border: Border.all(
-                color: currentAccent.withValues(alpha: 0.95),
-                width: 1.35,
+                color: currentAccent.withValues(alpha: 0.92),
+                width: 1.6,
               ),
               boxShadow: const [
                 BoxShadow(
-                  color: Color(0x66000000),
-                  blurRadius: 5,
-                  offset: Offset(0, 2),
+                  color: Color(0x22000000),
+                  blurRadius: 2,
+                  offset: Offset(0, 1),
                 ),
               ],
             ),
@@ -4394,34 +4379,59 @@ class _TavernScreenState extends State<TavernScreen> {
                 right: fieldRight,
                 top: height * (36 / 159),
                 bottom: height * (35 / 159),
-                child: TextField(
-                  controller: _messageController,
-                  minLines: null,
-                  maxLines: null,
-                  expands: true,
-                  maxLength: 2000,
-                  textAlignVertical: TextAlignVertical.center,
-                  textCapitalization: TextCapitalization.sentences,
-                  textInputAction: TextInputAction.send,
-                  scrollPadding: const EdgeInsets.only(bottom: 110),
-                  style: TextStyle(
-                    color: const Color(0xfff3ece4),
-                    fontSize: width < 330 ? 12.2 : 13.2,
-                    height: 1.0,
-                  ),
-                  decoration: const InputDecoration(
-                    isCollapsed: true,
-                    counterText: '',
-                    hintText: 'Écrire un message...',
-                    hintStyle: TextStyle(
-                      color: Colors.white38,
+                child: ValueListenableBuilder<TextEditingValue>(
+                  valueListenable: _messageController,
+                  child: TextField(
+                    controller: _messageController,
+                    minLines: null,
+                    maxLines: null,
+                    expands: true,
+                    maxLength: 2000,
+                    textAlignVertical: TextAlignVertical.center,
+                    textCapitalization: TextCapitalization.sentences,
+                    textInputAction: TextInputAction.send,
+                    scrollPadding: const EdgeInsets.only(bottom: 110),
+                    style: TextStyle(
+                      color: const Color(0xfff3ece4),
+                      fontSize: width < 330 ? 12.2 : 13.2,
                       height: 1.0,
                     ),
-                    border: InputBorder.none,
-                    contentPadding: EdgeInsets.zero,
+                    decoration: const InputDecoration(
+                      isCollapsed: true,
+                      counterText: '',
+                      border: InputBorder.none,
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                    onTap: _scheduleScrollToBottom,
+                    onSubmitted: (_) => _sendMessage(),
                   ),
-                  onTap: _scheduleScrollToBottom,
-                  onSubmitted: (_) => _sendMessage(),
+                  builder: (
+                    BuildContext context,
+                    TextEditingValue value,
+                    Widget? child,
+                  ) {
+                    return Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        if (value.text.isEmpty)
+                          Align(
+                            alignment: Alignment.center,
+                            child: IgnorePointer(
+                              child: Text(
+                                'Écrire un message...',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  color: Colors.white38,
+                                  fontSize: width < 330 ? 12.2 : 13.2,
+                                  height: 1.0,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ?child,
+                      ],
+                    );
+                  },
                 ),
               ),
               Positioned(

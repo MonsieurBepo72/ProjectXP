@@ -70,3 +70,7 @@ project_xp_backup_before_*
 *.rej
 *.broken
 *.broken.*
+
+# Node / Supabase local tooling
+node_modules/
+supabase/.temp/

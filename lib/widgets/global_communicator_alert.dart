@@ -9,6 +9,7 @@ import '../screens/private_chat_screen.dart';
 import '../services/app_notification_service.dart';
 import '../services/friend_alias_service.dart';
 import '../services/friend_service.dart';
+import '../services/notification_center_service.dart';
 import '../services/private_message_service.dart';
 import '../services/project_xp_communicator_ui_service.dart';
 import '../services/project_xp_startup_service.dart';
@@ -41,12 +42,16 @@ class _GlobalCommunicatorAlertState
   StreamSubscription<int>?
       _friendRequestCountSubscription;
 
+  StreamSubscription<int>?
+      _notificationCenterCountSubscription;
+
   late final AnimationController _shakeController;
 
   ProjectXpInAppNotification? _visibleNotification;
 
   int _unreadPrivateMessageCount = 0;
   int _incomingFriendRequestCount = 0;
+  int _notificationCenterUnreadCount = 0;
   int _otherPendingCount = 0;
 
   DateTime? _lastShakeAt;
@@ -55,7 +60,7 @@ class _GlobalCommunicatorAlertState
     final int total =
         _unreadPrivateMessageCount +
             _incomingFriendRequestCount +
-            _otherPendingCount;
+            _notificationCenterUnreadCount;
 
     return total.clamp(0, 999).toInt();
   }
@@ -155,6 +160,7 @@ class _GlobalCommunicatorAlertState
     _tapSubscription?.cancel();
     _unreadPrivateMessageSubscription?.cancel();
     _friendRequestCountSubscription?.cancel();
+    _notificationCenterCountSubscription?.cancel();
 
     _shakeController.dispose();
 
@@ -177,6 +183,7 @@ class _GlobalCommunicatorAlertState
   Future<void> _bindSocialStreams() async {
     await _unreadPrivateMessageSubscription?.cancel();
     await _friendRequestCountSubscription?.cancel();
+    await _notificationCenterCountSubscription?.cancel();
 
     if (!mounted) {
       return;
@@ -206,6 +213,20 @@ class _GlobalCommunicatorAlertState
       ) {
         debugPrint(
           'Compteur global demandes d’amis indisponible : $error',
+        );
+      },
+    );
+
+    _notificationCenterCountSubscription =
+        NotificationCenterService
+            .unreadCountStream()
+            .listen(
+      _handleNotificationCenterCount,
+      onError: (
+        Object error,
+      ) {
+        debugPrint(
+          'Compteur global Notifications indisponible : $error',
         );
       },
     );
@@ -274,6 +295,30 @@ class _GlobalCommunicatorAlertState
           )) {
         _visibleNotification = null;
       }
+    });
+
+    if (increased) {
+      _triggerShake();
+    }
+  }
+
+  void _handleNotificationCenterCount(
+    int count,
+  ) {
+    if (!mounted) {
+      return;
+    }
+
+    final int cleanCount =
+        count < 0 ? 0 : count;
+
+    final bool increased =
+        cleanCount >
+            _notificationCenterUnreadCount;
+
+    setState(() {
+      _notificationCenterUnreadCount =
+          cleanCount;
     });
 
     if (increased) {
@@ -428,6 +473,11 @@ class _GlobalCommunicatorAlertState
     }
 
     if (_incomingFriendRequestCount > 0) {
+      await _openCommunicator();
+      return;
+    }
+
+    if (_notificationCenterUnreadCount > 0) {
       await _openCommunicator();
       return;
     }

@@ -1,6 +1,11 @@
 import 'package:flutter/material.dart';
 
-import 'splash_screen.dart';
+import '../services/auth_service.dart';
+import '../services/avatar_storage.dart';
+
+import 'auth_screen.dart';
+import 'avatar/avatar_choice_screen.dart';
+import 'hall_screen.dart';
 
 class IntroSplashScreen extends StatefulWidget {
   const IntroSplashScreen({
@@ -15,18 +20,21 @@ class IntroSplashScreen extends StatefulWidget {
 class _IntroSplashScreenState
     extends State<IntroSplashScreen>
     with SingleTickerProviderStateMixin {
+  static const Duration _nextScreenFadeDuration =
+      Duration(
+    milliseconds: 2000,
+  );
+
   late final AnimationController _controller;
 
   late final Animation<double> _fadeAnimation;
   late final Animation<double> _scaleAnimation;
 
+  bool _navigationStarted = false;
+
   @override
   void initState() {
     super.initState();
-
-    // =========================================================================
-    // ANIMATION GÉNÉRALE DE L'INTRO
-    // =========================================================================
 
     _controller = AnimationController(
       vsync: this,
@@ -34,15 +42,6 @@ class _IntroSplashScreenState
         milliseconds: 8000,
       ),
     );
-
-    // =========================================================================
-    // FONDU
-    //
-    // Invisible
-    // → apparition
-    // → maintien
-    // → disparition vers le noir
-    // =========================================================================
 
     _fadeAnimation = TweenSequence<double>(
       [
@@ -79,10 +78,6 @@ class _IntroSplashScreenState
       _controller,
     );
 
-    // =========================================================================
-    // LÉGER ZOOM CINÉMATIQUE
-    // =========================================================================
-
     _scaleAnimation = Tween<double>(
       begin: 1.0,
       end: 1.04,
@@ -96,37 +91,102 @@ class _IntroSplashScreenState
     _startIntro();
   }
 
-  // ===========================================================================
-  // DÉMARRAGE
-  // ===========================================================================
-
   Future<void> _startIntro() async {
+    final Future<Widget> destinationFuture =
+        _getDestination();
+
     await _controller.forward();
 
     if (!mounted) {
       return;
     }
 
-    // L'intro est déjà complètement fondue vers le noir.
-    // On ouvre donc le Splash sans animation supplémentaire.
-    Navigator.of(context).pushReplacement(
+    final Widget destination =
+        await destinationFuture;
+
+    if (!mounted) {
+      return;
+    }
+
+    await _openNextScreen(
+      destination,
+    );
+  }
+
+  Future<Widget> _getDestination() async {
+    final bool isLoggedIn =
+        await AuthService.isLoggedIn();
+
+    if (!isLoggedIn) {
+      return const AuthScreen();
+    }
+
+    final String? userId =
+        await AuthService.getCurrentUserId();
+
+    if (userId == null ||
+        userId.trim().isEmpty) {
+      return const AuthScreen();
+    }
+
+    final bool hasAvatar =
+        await AvatarStorage.hasAvatar(
+      userId,
+    );
+
+    if (!hasAvatar) {
+      return const AvatarChoiceScreen();
+    }
+
+    return const HallScreen();
+  }
+
+  Future<void> _openNextScreen(
+    Widget destination,
+  ) async {
+    if (_navigationStarted) {
+      return;
+    }
+
+    _navigationStarted = true;
+
+    if (!mounted) {
+      return;
+    }
+
+    await Navigator.of(context).pushReplacement(
       PageRouteBuilder<void>(
-        transitionDuration: Duration.zero,
-        reverseTransitionDuration: Duration.zero,
+        transitionDuration:
+            _nextScreenFadeDuration,
+        reverseTransitionDuration:
+            _nextScreenFadeDuration,
         pageBuilder: (
           context,
           animation,
           secondaryAnimation,
         ) {
-          return const SplashScreen();
+          return destination;
+        },
+        transitionsBuilder: (
+          context,
+          animation,
+          secondaryAnimation,
+          child,
+        ) {
+          final Animation<double> fadeAnimation =
+              CurvedAnimation(
+            parent: animation,
+            curve: Curves.easeOut,
+          );
+
+          return FadeTransition(
+            opacity: fadeAnimation,
+            child: child,
+          );
         },
       ),
     );
   }
-
-  // ===========================================================================
-  // BUILD
-  // ===========================================================================
 
   @override
   Widget build(
@@ -173,10 +233,6 @@ class _IntroSplashScreenState
       ),
     );
   }
-
-  // ===========================================================================
-  // NETTOYAGE
-  // ===========================================================================
 
   @override
   void dispose() {

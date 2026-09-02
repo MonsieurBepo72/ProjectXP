@@ -1,12 +1,22 @@
 import 'package:flutter/material.dart';
 
+import 'package:project_xp/models/avatar_model.dart';
+import 'package:project_xp/models/game_library_entry.dart';
+import 'package:project_xp/screens/cloud_identity_screen.dart';
+import 'package:project_xp/screens/game_library_screen.dart';
 import 'package:project_xp/screens/profile_screen.dart';
 import 'package:project_xp/screens/splash_screen.dart';
 import 'package:project_xp/services/app_notification_service.dart';
 import 'package:project_xp/services/auth_service.dart';
+import 'package:project_xp/services/avatar_storage.dart';
 import 'package:project_xp/services/biometric_auth_service.dart';
+import 'package:project_xp/services/cloud_identity_service.dart';
 import 'package:project_xp/services/computer_settings_service.dart';
+import 'package:project_xp/services/game_library_service.dart';
 import 'package:project_xp/services/session_service.dart';
+
+import '../widgets/avatar_renderer.dart';
+import '../widgets/hall_home_button.dart';
 
 class ComputerScreen extends StatefulWidget {
   const ComputerScreen({
@@ -29,6 +39,12 @@ class _ComputerScreenState extends State<ComputerScreen> {
 
   bool _biometricAvailable = false;
   bool _biometricEnabled = false;
+
+  CloudIdentityStatus? _cloudIdentityStatus;
+
+  AvatarModel? _avatar;
+  List<GameLibraryEntry> _games = <GameLibraryEntry>[];
+  List<GamingActivityEvent> _activity = <GamingActivityEvent>[];
 
   @override
   void initState() {
@@ -58,6 +74,18 @@ class _ComputerScreenState extends State<ComputerScreen> {
         await BiometricAuthService
             .isEnabledForCurrentAccount();
 
+    final CloudIdentityStatus cloudIdentityStatus =
+        await CloudIdentityService.loadStatus();
+
+    final AvatarModel? avatar =
+        await AvatarStorage.loadCurrentAvatar();
+
+    final List<GameLibraryEntry> games =
+        await GameLibraryService.loadCurrentLibrary();
+
+    final List<GamingActivityEvent> activity =
+        await GameLibraryService.loadCurrentActivity();
+
     if (!mounted) {
       return;
     }
@@ -77,6 +105,13 @@ class _ComputerScreenState extends State<ComputerScreen> {
 
       _biometricEnabled =
           biometricEnabled;
+
+      _cloudIdentityStatus =
+          cloudIdentityStatus;
+
+      _avatar = avatar;
+      _games = games;
+      _activity = activity;
 
       _loading = false;
     });
@@ -108,6 +143,30 @@ class _ComputerScreenState extends State<ComputerScreen> {
             const ProfileScreen(),
       ),
     );
+  }
+
+  Future<void> _openLibrary() async {
+    await Navigator.push<void>(
+      context,
+      MaterialPageRoute<void>(
+        builder: (context) =>
+            const GameLibraryScreen(),
+      ),
+    );
+
+    await _loadData();
+  }
+
+  Future<void> _openCloudIdentity() async {
+    await Navigator.push<void>(
+      context,
+      MaterialPageRoute<void>(
+        builder: (context) =>
+            const CloudIdentityScreen(),
+      ),
+    );
+
+    await _loadData();
   }
 
   // ==========================================================================
@@ -173,6 +232,9 @@ class _ComputerScreenState extends State<ComputerScreen> {
     if (confirmed != true) {
       return;
     }
+
+    await CloudIdentityService
+        .signOutPermanentCloudUser();
 
     await SessionService.logout();
 
@@ -651,6 +713,28 @@ class _ComputerScreenState extends State<ComputerScreen> {
 
                     const _SecuritySectionLabel(
                       label: 'SÉCURITÉ',
+                    ),
+
+                    const SizedBox(
+                      height: 10,
+                    ),
+
+                    _AccountActionButton(
+                      icon:
+                          Icons.cloud_outlined,
+                      title:
+                          'Compte Cloud Project XP',
+                      subtitle:
+                          _cloudIdentityStatus?.isPermanent == true
+                              ? 'Actif • identité récupérable sur plusieurs appareils'
+                              : 'Local • activer la sauvegarde d’identité Cloud',
+                      onTap: () {
+                        Navigator.pop(
+                          sheetContext,
+                        );
+
+                        _openCloudIdentity();
+                      },
                     ),
 
                     const SizedBox(
@@ -1701,6 +1785,125 @@ class _ComputerScreenState extends State<ComputerScreen> {
   }
 
   // ==========================================================================
+  // CENTRE DE CONFIGURATION DU PORTAIL
+  // ==========================================================================
+
+  void _openControlCenter() {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor:
+          const Color(0xff17120f),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(
+          top: Radius.circular(24),
+        ),
+      ),
+      builder: (sheetContext) {
+        void openAfterClose(
+          VoidCallback action,
+        ) {
+          Navigator.pop(sheetContext);
+          Future<void>.microtask(action);
+        }
+
+        return SafeArea(
+          top: false,
+          child: SingleChildScrollView(
+            padding:
+                const EdgeInsets.fromLTRB(
+              18,
+              16,
+              18,
+              28,
+            ),
+            child: Column(
+              mainAxisSize:
+                  MainAxisSize.min,
+              children: [
+                _buildSheetHandle(),
+
+                const SizedBox(
+                  height: 14,
+                ),
+
+                const _SheetTitle(
+                  icon:
+                      Icons.settings_suggest,
+                  title:
+                      'CENTRE DE CONFIGURATION',
+                ),
+
+                const SizedBox(
+                  height: 14,
+                ),
+
+                _SettingsHubTile(
+                  icon:
+                      Icons.settings,
+                  title:
+                      'PARAMÈTRES',
+                  subtitle:
+                      'Musique, sons, vibrations et notifications',
+                  onTap: () {
+                    openAfterClose(
+                      _openSettings,
+                    );
+                  },
+                ),
+
+                const SizedBox(
+                  height: 10,
+                ),
+
+                _SettingsHubTile(
+                  icon:
+                      Icons.tune,
+                  title:
+                      'OPTIONS',
+                  subtitle:
+                      'Animations, confirmations et conseils de Bjorn',
+                  onTap: () {
+                    openAfterClose(
+                      _openOptions,
+                    );
+                  },
+                ),
+
+                const SizedBox(
+                  height: 10,
+                ),
+
+                _SettingsHubTile(
+                  icon:
+                      Icons.manage_accounts,
+                  title:
+                      'COMPTE & SÉCURITÉ',
+                  subtitle:
+                      'E-mail, mot de passe, biométrie et déconnexion',
+                  onTap: () {
+                    openAfterClose(
+                      _openAccount,
+                    );
+                  },
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  void _showPortalComingSoon(
+    String feature,
+  ) {
+    _showMessage(
+      '$feature sera branché au portail quand cette partie de Project XP sera développée.',
+    );
+  }
+
+  // ==========================================================================
   // BUILD
   // ==========================================================================
 
@@ -1710,12 +1913,20 @@ class _ComputerScreenState extends State<ComputerScreen> {
   ) {
     return Scaffold(
       backgroundColor:
-          const Color(0xff120c08),
+          const Color(0xff0d0b0a),
       appBar: AppBar(
         backgroundColor:
             const Color(0xff21150e),
         foregroundColor:
             const Color(0xffffc857),
+        automaticallyImplyLeading: false,
+        leadingWidth: 58,
+        leading: const Center(
+          child: HallHomeButton(
+            width: 44,
+            height: 40,
+          ),
+        ),
         centerTitle: true,
         title: const Text(
           'TERMINAL XP',
@@ -1738,94 +1949,34 @@ class _ComputerScreenState extends State<ComputerScreen> {
               child:
                   SingleChildScrollView(
                 padding:
-                    const EdgeInsets.all(
-                  20,
+                    const EdgeInsets.fromLTRB(
+                  12,
+                  12,
+                  12,
+                  24,
                 ),
-                child: Column(
-                  children: [
-                    _TerminalHeader(
-                      username:
-                          _username,
-                    ),
-
-                    const SizedBox(
-                      height: 26,
-                    ),
-
-                    _TerminalMenuCard(
-                      icon:
-                          Icons.person,
-                      title:
-                          'MON PROFIL',
-                      subtitle:
-                          'Profil, avatar, jeux, plateformes et réseaux',
-                      onTap:
-                          _openProfile,
-                    ),
-
-                    const SizedBox(
-                      height: 14,
-                    ),
-
-                    _TerminalMenuCard(
-                      icon:
-                          Icons.settings,
-                      title:
-                          'PARAMÈTRES',
-                      subtitle:
-                          'Musique, sons, vibrations et notifications',
-                      onTap:
-                          _openSettings,
-                    ),
-
-                    const SizedBox(
-                      height: 14,
-                    ),
-
-                    _TerminalMenuCard(
-                      icon:
-                          Icons.tune,
-                      title:
-                          'OPTIONS',
-                      subtitle:
-                          'Animations, confirmations et conseils de Bjorn',
-                      onTap:
-                          _openOptions,
-                    ),
-
-                    const SizedBox(
-                      height: 14,
-                    ),
-
-                    _TerminalMenuCard(
-                      icon:
-                          Icons.manage_accounts,
-                      title:
-                          'COMPTE & SÉCURITÉ',
-                      subtitle:
-                          'E-mail, mot de passe, biométrie et déconnexion',
-                      onTap:
-                          _openAccount,
-                    ),
-
-                    const SizedBox(
-                      height: 28,
-                    ),
-
-                    const Text(
-                      'PROJECT XP // TERMINAL DU HALL',
-                      textAlign:
-                          TextAlign.center,
-                      style: TextStyle(
-                        color:
-                            Colors.white24,
-                        fontSize: 10,
-                        fontWeight:
-                            FontWeight.bold,
-                        letterSpacing: 1.8,
-                      ),
-                    ),
-                  ],
+                child: _PortalBrowser(
+                  username:
+                      _username,
+                  avatar:
+                      _avatar,
+                  games:
+                      _games,
+                  activity:
+                      _activity,
+                  onProfile:
+                      _openProfile,
+                  onSettings:
+                      _openControlCenter,
+                  onReload:
+                      _loadData,
+                  onLibrary:
+                      _openLibrary,
+                  onQuestTap: () {
+                    _showPortalComingSoon(
+                      'Les quêtes',
+                    );
+                  },
                 ),
               ),
             ),
@@ -1834,115 +1985,150 @@ class _ComputerScreenState extends State<ComputerScreen> {
 }
 
 // =============================================================================
-// EN-TÊTE DU TERMINAL
+// NAVIGATEUR PROJECT XP
 // =============================================================================
 
-class _TerminalHeader
-    extends StatelessWidget {
+class _PortalBrowser extends StatelessWidget {
   final String username;
+  final AvatarModel? avatar;
+  final List<GameLibraryEntry> games;
+  final List<GamingActivityEvent> activity;
+  final VoidCallback onProfile;
+  final VoidCallback onSettings;
+  final VoidCallback onReload;
+  final VoidCallback onLibrary;
+  final VoidCallback onQuestTap;
 
-  const _TerminalHeader({
+  const _PortalBrowser({
     required this.username,
+    required this.avatar,
+    required this.games,
+    required this.activity,
+    required this.onProfile,
+    required this.onSettings,
+    required this.onReload,
+    required this.onLibrary,
+    required this.onQuestTap,
   });
 
   @override
-  Widget build(
-    BuildContext context,
-  ) {
+  Widget build(BuildContext context) {
     return Container(
       width: double.infinity,
-      padding:
-          const EdgeInsets.all(
-        22,
-      ),
+      clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
-        color:
-            const Color(0xff21150e),
-        borderRadius:
-            BorderRadius.circular(
-          22,
-        ),
+        color: const Color(0xff111315),
+        borderRadius: BorderRadius.circular(18),
         border: Border.all(
-          color:
-              const Color(0xffffc857),
-          width: 2,
+          color: const Color(0xff4b3a25),
+          width: 1.2,
         ),
         boxShadow: const [
           BoxShadow(
-            color:
-                Colors.black45,
-            blurRadius: 16,
-            offset:
-                Offset(0, 8),
+            color: Colors.black54,
+            blurRadius: 20,
+            offset: Offset(0, 10),
           ),
         ],
       ),
       child: Column(
         children: [
-          Container(
-            width: 74,
-            height: 74,
-            decoration:
-                BoxDecoration(
-              shape:
-                  BoxShape.circle,
-              color:
-                  const Color(
-                0xff160e09,
+          _BrowserBar(
+            onSettings: onSettings,
+            onReload: onReload,
+          ),
+          _PortalPage(
+            username: username,
+            avatar: avatar,
+            games: games,
+            activity: activity,
+            onProfile: onProfile,
+            onLibrary: onLibrary,
+            onQuestTap: onQuestTap,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _BrowserBar extends StatelessWidget {
+  final VoidCallback onSettings;
+  final VoidCallback onReload;
+
+  const _BrowserBar({
+    required this.onSettings,
+    required this.onReload,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 52,
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      decoration: const BoxDecoration(
+        color: Color(0xff202326),
+        border: Border(
+          bottom: BorderSide(color: Colors.white10),
+        ),
+      ),
+      child: Row(
+        children: [
+          const _BrowserIcon(
+            icon: Icons.arrow_back_ios_new,
+            enabled: false,
+          ),
+          const _BrowserIcon(
+            icon: Icons.arrow_forward_ios,
+            enabled: false,
+          ),
+          _BrowserIcon(
+            icon: Icons.refresh,
+            onTap: onReload,
+          ),
+          const SizedBox(width: 5),
+          Expanded(
+            child: Container(
+              height: 34,
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xff151719),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.white10),
               ),
-              border:
-                  Border.all(
-                color:
-                    const Color(
-                  0xffffc857,
-                ),
-                width: 2,
+              child: const Row(
+                children: [
+                  Icon(
+                    Icons.lock,
+                    color: Color(0xff7fd18b),
+                    size: 14,
+                  ),
+                  SizedBox(width: 7),
+                  Expanded(
+                    child: Text(
+                      'portal.projectxp.gg',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: Colors.white70,
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
-            child: const Icon(
-              Icons.computer,
-              color:
-                  Color(
-                0xffffc857,
-              ),
-              size: 38,
-            ),
           ),
-
-          const SizedBox(
-            height: 14,
-          ),
-
-          const Text(
-            'BIENVENUE SUR LE TERMINAL',
-            textAlign:
-                TextAlign.center,
-            style: TextStyle(
-              color:
-                  Color(
-                0xffffc857,
-              ),
-              fontWeight:
-                  FontWeight.bold,
-              letterSpacing: 1.4,
-            ),
-          ),
-
-          const SizedBox(
-            height: 7,
-          ),
-
-          Text(
-            username,
-            textAlign:
-                TextAlign.center,
-            style:
-                const TextStyle(
-              color:
-                  Colors.white,
-              fontSize: 24,
-              fontWeight:
-                  FontWeight.bold,
+          const SizedBox(width: 4),
+          IconButton(
+            tooltip: 'Paramètres Project XP',
+            onPressed: onSettings,
+            visualDensity: VisualDensity.compact,
+            icon: const Icon(
+              Icons.settings,
+              color: Color(0xffffc857),
+              size: 22,
             ),
           ),
         ],
@@ -1951,18 +2137,603 @@ class _TerminalHeader
   }
 }
 
-// =============================================================================
-// CARTE DU MENU
-// =============================================================================
+class _BrowserIcon extends StatelessWidget {
+  final IconData icon;
+  final bool enabled;
+  final VoidCallback? onTap;
 
-class _TerminalMenuCard
+  const _BrowserIcon({
+    required this.icon,
+    this.enabled = true,
+    this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final Color color = enabled ? Colors.white60 : Colors.white24;
+
+    return SizedBox(
+      width: 32,
+      height: 38,
+      child: IconButton(
+        padding: EdgeInsets.zero,
+        visualDensity: VisualDensity.compact,
+        onPressed: enabled ? onTap : null,
+        icon: Icon(
+          icon,
+          color: color,
+          size: 17,
+        ),
+      ),
+    );
+  }
+}
+
+class _PortalPage extends StatelessWidget {
+  final String username;
+  final AvatarModel? avatar;
+  final List<GameLibraryEntry> games;
+  final List<GamingActivityEvent> activity;
+  final VoidCallback onProfile;
+  final VoidCallback onLibrary;
+  final VoidCallback onQuestTap;
+
+  const _PortalPage({
+    required this.username,
+    required this.avatar,
+    required this.games,
+    required this.activity,
+    required this.onProfile,
+    required this.onLibrary,
+    required this.onQuestTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    GameLibraryEntry? currentGame;
+    for (final GameLibraryEntry game in games) {
+      if (game.status == GameStatus.inProgress) {
+        currentGame = game;
+        break;
+      }
+    }
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(16, 22, 16, 22),
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            Color(0xff171312),
+            Color(0xff101214),
+          ],
+        ),
+      ),
+      child: Column(
+        children: [
+          const Text(
+            'PORTAIL DES AVENTURIERS',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: Color(0xffffc857),
+              fontSize: 24,
+              fontWeight: FontWeight.w900,
+              letterSpacing: 1.8,
+            ),
+          ),
+          const SizedBox(height: 20),
+          _PortalIdentityCard(
+            username: username,
+            avatar: avatar,
+            onProfile: onProfile,
+          ),
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              Expanded(
+                child: SizedBox(
+                  height: 145,
+                  child: _PortalInfoCard(
+                    icon: Icons.sports_esports,
+                    title: 'EN COURS',
+                    value: currentGame?.title ?? 'Aucun jeu en cours',
+                    subtitle: currentGame == null
+                        ? 'Choisis une aventure dans ta Bibliothèque'
+                        : '${currentGame.platform.label} • ${currentGame.progressPercent} %',
+                    onTap: onLibrary,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: SizedBox(
+                  height: 145,
+                  child: _PortalInfoCard(
+                    icon: Icons.auto_awesome,
+                    title: 'QUÊTE ACTIVE',
+                    value: 'Aucune quête',
+                    subtitle: 'Le Maître des Quêtes arrive bientôt',
+                    onTap: onQuestTap,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          _PortalLibraryCard(
+            games: games,
+            onTap: onLibrary,
+          ),
+          const SizedBox(height: 18),
+          _PortalAdventureFeed(activity: activity),
+        ],
+      ),
+    );
+  }
+}
+
+class _PortalIdentityCard extends StatelessWidget {
+  final String username;
+  final AvatarModel? avatar;
+  final VoidCallback onProfile;
+
+  const _PortalIdentityCard({
+    required this.username,
+    required this.avatar,
+    required this.onProfile,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final AvatarModel? currentAvatar = avatar;
+
+    return Material(
+      color: const Color(0xff1d1f22),
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        onTap: onProfile,
+        borderRadius: BorderRadius.circular(14),
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(15),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: const Color(0xffffc857).withValues(alpha: 0.28),
+            ),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 54,
+                height: 54,
+                clipBehavior: Clip.antiAlias,
+                decoration: BoxDecoration(
+                  color: const Color(0xff141618),
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: const Color(0xffffc857),
+                    width: 1.5,
+                  ),
+                ),
+                child: currentAvatar == null
+                    ? const Icon(
+                        Icons.person,
+                        color: Color(0xffffc857),
+                      )
+                    : ClipOval(
+                        child: FittedBox(
+                          fit: BoxFit.cover,
+                          alignment: Alignment.topCenter,
+                          child: AvatarRenderer(
+                            avatar: currentAvatar,
+                            size: 54,
+                            showFrame: false,
+                            compactHeadCrop: true,
+                          ),
+                        ),
+                      ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Bonjour $username 👋',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 5),
+                    const Text(
+                      'Niveau --  •  XP -- / --',
+                      style: TextStyle(
+                        color: Colors.white54,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    const Text(
+                      'Progression RPG en préparation',
+                      style: TextStyle(
+                        color: Color(0xffb69bdc),
+                        fontSize: 10.5,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const Icon(
+                Icons.chevron_right,
+                color: Color(0xffffc857),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PortalInfoCard extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String value;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  const _PortalInfoCard({
+    required this.icon,
+    required this.title,
+    required this.value,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: const Color(0xff1d1f22),
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
+        child: Container(
+          padding: const EdgeInsets.all(13),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: Colors.white10),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    icon,
+                    color: const Color(0xffffc857),
+                    size: 19,
+                  ),
+                  const SizedBox(width: 7),
+                  Expanded(
+                    child: Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Color(0xffffc857),
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: 0.7,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Text(
+                value,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 14.5,
+                  fontWeight: FontWeight.bold,
+                  height: 1.15,
+                ),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                subtitle,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Color(0x75FFFFFF),
+                  fontSize: 10.5,
+                  height: 1.25,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PortalLibraryCard extends StatelessWidget {
+  final List<GameLibraryEntry> games;
+  final VoidCallback onTap;
+
+  const _PortalLibraryCard({
+    required this.games,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final int inProgress =
+        games.where((game) => game.status == GameStatus.inProgress).length;
+    final int completed =
+        games.where((game) => game.status == GameStatus.completed).length;
+    final List<GameLibraryEntry> preview = games.take(4).toList();
+
+    return Material(
+      color: const Color(0xff1a1c1f),
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.fromLTRB(15, 14, 15, 15),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: Colors.white10),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(
+                    Icons.menu_book_rounded,
+                    color: Color(0xffffc857),
+                    size: 20,
+                  ),
+                  const SizedBox(width: 8),
+                  const Expanded(
+                    child: Text(
+                      'MA BIBLIOTHÈQUE',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                  ),
+                  const Icon(
+                    Icons.chevron_right,
+                    color: Colors.white38,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 7),
+              Text(
+                games.isEmpty
+                    ? 'Aucun jeu ajouté pour le moment.'
+                    : '${games.length} jeux • $inProgress en cours • $completed terminés',
+                style: const TextStyle(
+                  color: Colors.white54,
+                  fontSize: 11.5,
+                ),
+              ),
+              if (preview.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    for (int i = 0; i < preview.length; i++) ...[
+                      if (i > 0) const SizedBox(width: 7),
+                      Expanded(
+                        child: _PortalGameMini(game: preview[i]),
+                      ),
+                    ],
+                  ],
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PortalGameMini extends StatelessWidget {
+  final GameLibraryEntry game;
+
+  const _PortalGameMini({required this.game});
+
+  @override
+  Widget build(BuildContext context) {
+    final Widget fallback = Container(
+      color: const Color(0xff111315),
+      alignment: Alignment.center,
+      child: const Icon(
+        Icons.sports_esports,
+        color: Colors.white24,
+        size: 18,
+      ),
+    );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(6),
+          child: AspectRatio(
+            aspectRatio: 0.72,
+            child: game.coverUrl == null || game.coverUrl!.isEmpty
+                ? fallback
+                : Image.network(
+                    game.coverUrl!,
+                    fit: BoxFit.cover,
+                    errorBuilder: (context, error, stackTrace) => fallback,
+                  ),
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          game.title,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(
+            color: Colors.white60,
+            fontSize: 8.5,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _PortalAdventureFeed extends StatelessWidget {
+  final List<GamingActivityEvent> activity;
+
+  const _PortalAdventureFeed({required this.activity});
+
+  String _date(DateTime date) {
+    final String day = date.day.toString().padLeft(2, '0');
+    final String month = date.month.toString().padLeft(2, '0');
+    return '$day/$month';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final List<GamingActivityEvent> preview = activity.take(4).toList();
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(15, 14, 15, 15),
+      decoration: BoxDecoration(
+        color: const Color(0xff1a1c1f),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.white10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(
+                Icons.auto_stories_outlined,
+                color: Color(0xffffc857),
+                size: 20,
+              ),
+              SizedBox(width: 8),
+              Text(
+                'FIL D’AVENTURE',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 13,
+                  letterSpacing: 0.5,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          if (preview.isEmpty)
+            const Text(
+              'Tes trophées, succès, jeux terminés et autres accomplissements apparaîtront ici au fil de ton aventure.',
+              style: TextStyle(
+                color: Color(0x75FFFFFF),
+                fontSize: 11.5,
+                height: 1.35,
+              ),
+            )
+          else
+            for (final GamingActivityEvent event in preview)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Padding(
+                      padding: EdgeInsets.only(top: 4),
+                      child: Icon(
+                        Icons.circle,
+                        color: Color(0xffb69bdc),
+                        size: 5,
+                      ),
+                    ),
+                    const SizedBox(width: 9),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            event.title,
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          if (event.detail.isNotEmpty)
+                            Text(
+                              event.detail,
+                              style: const TextStyle(
+                                color: Colors.white38,
+                                fontSize: 10.5,
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                    Text(
+                      _date(event.createdAt),
+                      style: const TextStyle(
+                        color: Colors.white24,
+                        fontSize: 9.5,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+          const SizedBox(height: 2),
+          const Text(
+            'L’activité de tes amis rejoindra bientôt ce fil.',
+            style: TextStyle(
+              color: Colors.white24,
+              fontSize: 9.5,
+              height: 1.3,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+
+class _SettingsHubTile
     extends StatelessWidget {
   final IconData icon;
   final String title;
   final String subtitle;
   final VoidCallback onTap;
 
-  const _TerminalMenuCard({
+  const _SettingsHubTile({
     required this.icon,
     required this.title,
     required this.subtitle,
@@ -1975,27 +2746,28 @@ class _TerminalMenuCard
   ) {
     return Material(
       color:
-          const Color(0xff21150e),
+          const Color(0xff120d0a),
       borderRadius:
           BorderRadius.circular(
-        16,
+        14,
       ),
       child: InkWell(
-        onTap: onTap,
+        onTap:
+            onTap,
         borderRadius:
             BorderRadius.circular(
-          16,
+          14,
         ),
         child: Container(
           width: double.infinity,
           padding:
               const EdgeInsets.all(
-            17,
+            14,
           ),
           decoration: BoxDecoration(
             borderRadius:
                 BorderRadius.circular(
-              16,
+              14,
             ),
             border: Border.all(
               color:
@@ -2005,37 +2777,32 @@ class _TerminalMenuCard
           child: Row(
             children: [
               Container(
-                width: 48,
-                height: 48,
-                decoration:
-                    BoxDecoration(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
                   color:
-                      const Color(
-                    0xff160e09,
-                  ),
+                      const Color(0xff21150e),
                   borderRadius:
                       BorderRadius.circular(
-                    12,
+                    11,
                   ),
-                  border:
-                      Border.all(
+                  border: Border.all(
                     color:
-                        const Color(
-                      0xffffc857,
+                        const Color(0xffffc857)
+                            .withValues(
+                      alpha: 0.55,
                     ),
                   ),
                 ),
                 child: Icon(
                   icon,
                   color:
-                      const Color(
-                    0xffffc857,
-                  ),
+                      const Color(0xffffc857),
                 ),
               ),
 
               const SizedBox(
-                width: 14,
+                width: 12,
               ),
 
               Expanded(
@@ -2045,25 +2812,23 @@ class _TerminalMenuCard
                   children: [
                     Text(
                       title,
-                      style:
-                          const TextStyle(
+                      style: const TextStyle(
                         color:
                             Colors.white,
                         fontWeight:
                             FontWeight.bold,
-                        fontSize: 16,
+                        fontSize: 14,
                       ),
                     ),
                     const SizedBox(
-                      height: 4,
+                      height: 3,
                     ),
                     Text(
                       subtitle,
-                      style:
-                          const TextStyle(
+                      style: const TextStyle(
                         color:
                             Colors.white54,
-                        fontSize: 12,
+                        fontSize: 11,
                       ),
                     ),
                   ],
@@ -2073,9 +2838,7 @@ class _TerminalMenuCard
               const Icon(
                 Icons.chevron_right,
                 color:
-                    Color(
-                  0xffffc857,
-                ),
+                    Color(0xffffc857),
               ),
             ],
           ),

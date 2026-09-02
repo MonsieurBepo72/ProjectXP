@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../widgets/hall_home_button.dart';
+import 'find_players_screen.dart';
 import 'find_team_screen.dart';
 import 'teams_screen.dart';
 
@@ -29,6 +31,14 @@ class CompagnieScreen extends StatelessWidget {
       appBar: AppBar(
         backgroundColor: _panel,
         foregroundColor: _gold,
+        automaticallyImplyLeading: false,
+        leadingWidth: 58,
+        leading: const Center(
+          child: HallHomeButton(
+            width: 44,
+            height: 40,
+          ),
+        ),
         centerTitle: true,
         title: const Text(
           'COMPAGNIE',
@@ -187,7 +197,7 @@ class CompagnieScreen extends StatelessWidget {
                     MaterialPageRoute<void>(
                       builder:
                           (context) =>
-                              const _FindPlayersComingSoonScreen(),
+                              const FindPlayersScreen(),
                     ),
                   );
                 },
@@ -390,102 +400,6 @@ class _CompagnieMenuCard
                 ),
               ),
             ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// =============================================================================
-// Prochaine étape : Trouver des joueurs.
-// =============================================================================
-
-class _FindPlayersComingSoonScreen
-    extends StatelessWidget {
-  const _FindPlayersComingSoonScreen();
-
-  @override
-  Widget build(
-    BuildContext context,
-  ) {
-    return Scaffold(
-      backgroundColor:
-          const Color(
-        0xff160e09,
-      ),
-      appBar: AppBar(
-        backgroundColor:
-            const Color(
-          0xff21150e,
-        ),
-        foregroundColor:
-            const Color(
-          0xffffc857,
-        ),
-        title:
-            const Text(
-          'TROUVER DES JOUEURS',
-        ),
-      ),
-      body:
-          const SafeArea(
-        child:
-            Center(
-          child:
-              Padding(
-            padding:
-                EdgeInsets.all(
-              28,
-            ),
-            child:
-                Column(
-              mainAxisSize:
-                  MainAxisSize.min,
-              children: [
-                Icon(
-                  Icons.people_alt_outlined,
-                  color:
-                      Color(
-                    0xffffc857,
-                  ),
-                  size:
-                      58,
-                ),
-                SizedBox(
-                  height:
-                      16,
-                ),
-                Text(
-                  'Prochaine étape',
-                  style:
-                      TextStyle(
-                    color:
-                        Colors.white,
-                    fontSize:
-                        22,
-                    fontWeight:
-                        FontWeight.bold,
-                  ),
-                ),
-                SizedBox(
-                  height:
-                      8,
-                ),
-                Text(
-                  'Nous brancherons ici les profils publics, les filtres par jeux, plateformes et disponibilités, puis l’invitation dans un Compagnie.',
-                  textAlign:
-                      TextAlign.center,
-                  style:
-                      TextStyle(
-                    color:
-                        Colors.white60,
-                    height:
-                        1.45,
-                  ),
-                ),
-              ],
-            ),
           ),
         ),
       ),
