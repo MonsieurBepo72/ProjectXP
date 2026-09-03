@@ -23,16 +23,6 @@ Ces valeurs ne constituent pas une frontière de sécurité. Pour Supabase, la p
 
 Les secrets serveur doivent rester dans les variables d'environnement ou dans Supabase Secrets.
 
-## Serveur avatar de développement
-
-`backend/serveur.dart` est un outil de développement, pas un backend de production.
-
-- Il écoute uniquement `127.0.0.1` par défaut.
-- L'accès LAN doit être explicitement activé avec
-  `PROJECT_XP_DEV_SERVER_ALLOW_LAN=true`.
-- En mode LAN, `PROJECT_XP_DEV_SERVER_TOKEN` est obligatoire.
-- Ne jamais exposer ce serveur directement sur Internet.
-
 ## Supabase
 
 Avant une bêta publique :

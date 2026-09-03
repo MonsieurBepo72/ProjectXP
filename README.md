@@ -7,7 +7,8 @@ Le Hall sert de hub principal, la Taverne de salon public, et le Communicateur r
 
 - **Android :** plateforme de développement et de test principale.
 - **iOS :** cible prévue, mais Firebase iOS et la signature Apple ne sont pas encore configurés.
-- **Web / desktop :** dossiers Flutter présents, mais ces plateformes ne sont pas considérées comme supportées à ce stade.
+- **Web :** squelette Flutter conservé pour une future version web, mais cette plateforme n'est pas encore supportée.
+- **Desktop :** Windows, Linux et macOS desktop ne sont pas ciblés ; leurs dossiers Flutter ont été retirés du projet.
 - **Backend :** Supabase (auth/data/realtime/Edge Functions) + Firebase/FCM pour les notifications.
 
 ## Prérequis
@@ -43,7 +44,9 @@ assets/
   audio/        musique et effets sonores
 supabase/
   functions/    Edge Functions
-  *.sql         scripts de modération / administration
+  migrations/   migrations Supabase officielles
+  queries/      requêtes SQL de contrôle / diagnostic
+  manual/       scripts SQL historiques ou appliqués manuellement
 ```
 
 ## Configuration et secrets
