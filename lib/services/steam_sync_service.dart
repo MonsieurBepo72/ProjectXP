@@ -271,8 +271,8 @@ class SteamSyncService {
     try {
       await syncEverything(
         force: false,
-        maxGames: 24,
-        staleAfter: const Duration(hours: 8),
+        maxGames: 8,
+        staleAfter: const Duration(hours: 12),
       );
     } on SteamSyncException catch (error) {
       debugPrint('Sync Steam démarrage ignorée : ${error.message}');
@@ -368,7 +368,7 @@ class SteamSyncService {
       if (achievementResult.issues.isNotEmpty) {
         final SteamAchievementSyncIssue first = achievementResult.issues.first;
 
-        message += ' Exemple : ${first.title} — ${first.message}';
+        message += ' À revoir : ${first.title}.';
       }
 
       if (libraryResult.warning?.trim().isNotEmpty == true) {
@@ -530,7 +530,8 @@ class SteamSyncService {
             id: 'steam_$appId',
             title: title,
             platform: GamePlatform.steam,
-            status: GameStatus.unclassified,
+            status: playtime > 0 ? GameStatus.inProgress : GameStatus.backlog,
+            statusAutomatic: true,
             favorite: false,
             progressPercent: 0,
             source: GameSource.steam,
@@ -544,7 +545,7 @@ class SteamSyncService {
             achievements: const GameAchievementSummary(),
             platformProfiles: <GamePlatformProfile>[steamProfile],
             addedAt: now,
-            updatedAt: now,
+            updatedAt: lastPlayedAt ?? now,
           ),
         );
       }
@@ -744,10 +745,79 @@ class SteamSyncService {
         );
       }
 
+      // Steam redevient la référence dès qu'il possède une donnée
+      // suffisamment fiable. Un choix manuel ne doit pas figer une information
+      // objectivement contredite par la plateforme.
+      //
+      // - catalogue Steam connu et non vide : 0 % = Pas commencé si aucune
+      //   activité, progression partielle = En cours, 100 % = Terminé ;
+      // - jeu Steam réellement sans succès : Steam ne sait pas si l'histoire
+      //   a été terminée, donc un Terminé / Abandonné manuel reste pertinent ;
+      // - Pas commencé / En cours sont toujours corrigés par le temps de jeu
+      //   et les succès réellement débloqués sur Steam.
+      final int platformUnlocked = updatedSteam.achievementDetails.isNotEmpty
+          ? updatedSteam.achievementDetails
+                .where((achievement) => achievement.platformUnlocked)
+                .length
+          : summary.unlocked;
+      final int achievementTotal = updatedSteam.achievementDetails.isNotEmpty
+          ? updatedSteam.achievementDetails.length
+          : summary.total;
+      final bool hasKnownAchievementProgress = achievementTotal > 0;
+      final bool hasStarted =
+          updatedSteam.playtimeMinutes > 0 || platformUnlocked > 0;
+
+      GameStatus automaticStatus;
+      if (hasKnownAchievementProgress && platformUnlocked >= achievementTotal) {
+        automaticStatus = GameStatus.completed;
+      } else if (hasStarted) {
+        automaticStatus = GameStatus.inProgress;
+      } else {
+        automaticStatus = GameStatus.backlog;
+      }
+
+      final bool preserveManualOutcome =
+          !hasKnownAchievementProgress &&
+          !entry.statusAutomatic &&
+          (entry.status == GameStatus.completed ||
+              entry.status == GameStatus.abandoned);
+
+      final DateTime now = DateTime.now();
+      DateTime recentAt = entry.updatedAt;
+
+      // Une synchro technique ne change pas l'activité récente. En revanche,
+      // un succès réellement nouveau peut avancer la date avec SON horodatage
+      // Steam, jamais avec l'heure de la synchronisation.
+      if (!firstDetailedSync && newlyUnlockedDetails.isNotEmpty) {
+        DateTime? latestUnlockAt;
+        for (final GameAchievementDetail achievement in newlyUnlockedDetails) {
+          final DateTime? unlockedAt = achievement.platformUnlockedAt;
+          if (unlockedAt != null &&
+              (latestUnlockAt == null || unlockedAt.isAfter(latestUnlockAt))) {
+            latestUnlockAt = unlockedAt;
+          }
+        }
+        final DateTime rawMeaningfulDate = latestUnlockAt ?? DateTime.now();
+        final DateTime meaningfulDate =
+            rawMeaningfulDate.isAfter(now.add(const Duration(minutes: 10)))
+            ? now
+            : rawMeaningfulDate;
+        if (meaningfulDate.isAfter(recentAt)) {
+          recentAt = meaningfulDate;
+        }
+      }
+
+      updated = updated.copyWith(
+        status: preserveManualOutcome ? entry.status : automaticStatus,
+        statusAutomatic: !preserveManualOutcome,
+        updatedAt: recentAt,
+      );
+
       if (persist) {
         await GameLibraryService.updateGame(
           updated,
           announceAchievementUnlocks: false,
+          technicalUpdate: true,
         );
       }
 
@@ -786,17 +856,47 @@ class SteamSyncService {
     required GamePlatformProfile updatedSteam,
     required List<GameAchievementDetail> achievements,
   }) async {
-    for (final GameAchievementDetail achievement in achievements.take(5)) {
+    if (achievements.isEmpty) {
+      return;
+    }
+
+    final DateTime now = DateTime.now();
+    final List<GameAchievementDetail> ordered =
+        List<GameAchievementDetail>.from(achievements)..sort((a, b) {
+          final DateTime aDate = a.platformUnlockedAt ?? now;
+          final DateTime bDate = b.platformUnlockedAt ?? now;
+          return bDate.compareTo(aDate);
+        });
+
+    DateTime safeDate(GameAchievementDetail achievement) {
+      final DateTime? raw = achievement.platformUnlockedAt;
+      if (raw == null || raw.isAfter(now.add(const Duration(minutes: 10)))) {
+        return now;
+      }
+      return raw;
+    }
+
+    for (final GameAchievementDetail achievement in ordered.take(5)) {
       await GameLibraryService.addActivity(
         title: 'Succès « ${achievement.name} » obtenu',
         detail: '${entry.title} • Steam',
+        createdAt: safeDate(achievement),
       );
     }
 
-    if (achievements.length > 5) {
+    if (ordered.length > 5) {
+      DateTime groupDate = safeDate(ordered[5]);
+      for (final GameAchievementDetail achievement in ordered.skip(5)) {
+        final DateTime candidate = safeDate(achievement);
+        if (candidate.isAfter(groupDate)) {
+          groupDate = candidate;
+        }
+      }
+
       await GameLibraryService.addActivity(
-        title: '${achievements.length - 5} autres succès sur ${entry.title}',
+        title: '${ordered.length - 5} autres succès sur ${entry.title}',
         detail: updatedSteam.progressText,
+        createdAt: groupDate,
       );
     }
   }
@@ -906,6 +1006,7 @@ class SteamSyncService {
         );
         checked += 1;
         newlyUnlocked += result.newlyUnlocked;
+        totalAchievementsKnown += result.summary.total;
 
         final int libraryIndex = workingLibrary.indexWhere(
           (item) => item.id == game.id,
@@ -930,9 +1031,28 @@ class SteamSyncService {
         if (result.summary.total <= 0 && result.achievements.isEmpty) {
           noAchievements += 1;
         }
-      } on SteamSyncException {
+      } on SteamSyncException catch (error) {
         // Une fiche indisponible / privée ne doit jamais bloquer les autres.
+        // On conserve aussi le détail pour savoir quels jeux sont à revoir,
+        // sans toucher à leurs données de succès déjà enregistrées.
         unavailable += 1;
+
+        final String appId =
+            game.platformProfile(GamePlatform.steam)?.externalId?.trim() ?? '';
+
+        issues.add(
+          SteamAchievementSyncIssue(
+            gameId: game.id,
+            title: game.title,
+            appId: appId,
+            message: error.message,
+          ),
+        );
+
+        debugPrint(
+          'Succès Steam indisponibles pour ${game.title} '
+          '($appId) : ${error.message}',
+        );
       }
 
       // Petite respiration entre deux appels pour éviter un burst inutile

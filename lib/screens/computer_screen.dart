@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:project_xp/models/avatar_model.dart';
 import 'package:project_xp/models/game_library_entry.dart';
 import 'package:project_xp/screens/cloud_identity_screen.dart';
-import 'package:project_xp/screens/game_library_screen.dart';
 import 'package:project_xp/screens/profile_screen.dart';
 import 'package:project_xp/screens/splash_screen.dart';
 import 'package:project_xp/services/app_notification_service.dart';
@@ -14,23 +13,20 @@ import 'package:project_xp/services/cloud_identity_service.dart';
 import 'package:project_xp/services/computer_settings_service.dart';
 import 'package:project_xp/services/game_library_service.dart';
 import 'package:project_xp/services/session_service.dart';
+import 'package:project_xp/services/steam_sync_service.dart';
 
 import '../widgets/avatar_renderer.dart';
 import '../widgets/hall_home_button.dart';
 
 class ComputerScreen extends StatefulWidget {
-  const ComputerScreen({
-    super.key,
-  });
+  const ComputerScreen({super.key});
 
   @override
-  State<ComputerScreen> createState() =>
-      _ComputerScreenState();
+  State<ComputerScreen> createState() => _ComputerScreenState();
 }
 
 class _ComputerScreenState extends State<ComputerScreen> {
-  ComputerSettings _settings =
-      ComputerSettings.defaults();
+  ComputerSettings _settings = ComputerSettings.defaults();
 
   bool _loading = true;
 
@@ -46,10 +42,32 @@ class _ComputerScreenState extends State<ComputerScreen> {
   List<GameLibraryEntry> _games = <GameLibraryEntry>[];
   List<GamingActivityEvent> _activity = <GamingActivityEvent>[];
 
+  SteamSyncPhase? _lastSteamSyncPhase;
+
   @override
   void initState() {
     super.initState();
+    SteamSyncService.syncState.addListener(_handleSteamSyncState);
+    _lastSteamSyncPhase = SteamSyncService.syncState.value.phase;
     _loadData();
+  }
+
+  @override
+  void dispose() {
+    SteamSyncService.syncState.removeListener(_handleSteamSyncState);
+    super.dispose();
+  }
+
+  void _handleSteamSyncState() {
+    final SteamSyncPhase phase = SteamSyncService.syncState.value.phase;
+    final bool justCompleted =
+        phase == SteamSyncPhase.completed &&
+        _lastSteamSyncPhase != SteamSyncPhase.completed;
+    _lastSteamSyncPhase = phase;
+
+    if (justCompleted) {
+      _reloadGamingData();
+    }
   }
 
   // ==========================================================================
@@ -57,34 +75,31 @@ class _ComputerScreenState extends State<ComputerScreen> {
   // ==========================================================================
 
   Future<void> _loadData() async {
-    final ComputerSettings settings =
-        await ComputerSettingsService.load();
+    final Future<ComputerSettings> settingsFuture =
+        ComputerSettingsService.load();
+    final Future<String?> usernameFuture = AuthService.getCurrentUsername();
+    final Future<String?> emailFuture = AuthService.getCurrentEmail();
+    final Future<bool> biometricAvailableFuture =
+        BiometricAuthService.isBiometricAvailable();
+    final Future<bool> biometricEnabledFuture =
+        BiometricAuthService.isEnabledForCurrentAccount();
+    final Future<CloudIdentityStatus> cloudIdentityFuture =
+        CloudIdentityService.loadStatus();
+    final Future<AvatarModel?> avatarFuture = AvatarStorage.loadCurrentAvatar();
+    final Future<List<GameLibraryEntry>> gamesFuture =
+        GameLibraryService.loadCurrentLibrary();
+    final Future<List<GamingActivityEvent>> activityFuture =
+        GameLibraryService.loadCurrentActivity();
 
-    final String? username =
-        await AuthService.getCurrentUsername();
-
-    final String? email =
-        await AuthService.getCurrentEmail();
-
-    final bool biometricAvailable =
-        await BiometricAuthService
-            .isBiometricAvailable();
-
-    final bool biometricEnabled =
-        await BiometricAuthService
-            .isEnabledForCurrentAccount();
-
-    final CloudIdentityStatus cloudIdentityStatus =
-        await CloudIdentityService.loadStatus();
-
-    final AvatarModel? avatar =
-        await AvatarStorage.loadCurrentAvatar();
-
-    final List<GameLibraryEntry> games =
-        await GameLibraryService.loadCurrentLibrary();
-
-    final List<GamingActivityEvent> activity =
-        await GameLibraryService.loadCurrentActivity();
+    final ComputerSettings settings = await settingsFuture;
+    final String? username = await usernameFuture;
+    final String? email = await emailFuture;
+    final bool biometricAvailable = await biometricAvailableFuture;
+    final bool biometricEnabled = await biometricEnabledFuture;
+    final CloudIdentityStatus cloudIdentityStatus = await cloudIdentityFuture;
+    final AvatarModel? avatar = await avatarFuture;
+    final List<GameLibraryEntry> games = await gamesFuture;
+    final List<GamingActivityEvent> activity = await activityFuture;
 
     if (!mounted) {
       return;
@@ -92,77 +107,55 @@ class _ComputerScreenState extends State<ComputerScreen> {
 
     setState(() {
       _settings = settings;
-
-      _username =
-          username?.trim().isNotEmpty == true
-              ? username!.trim()
-              : 'Aventurier';
-
+      _username = username?.trim().isNotEmpty == true
+          ? username!.trim()
+          : 'Aventurier';
       _email = email?.trim() ?? '';
-
-      _biometricAvailable =
-          biometricAvailable;
-
-      _biometricEnabled =
-          biometricEnabled;
-
-      _cloudIdentityStatus =
-          cloudIdentityStatus;
-
+      _biometricAvailable = biometricAvailable;
+      _biometricEnabled = biometricEnabled;
+      _cloudIdentityStatus = cloudIdentityStatus;
       _avatar = avatar;
       _games = games;
       _activity = activity;
-
       _loading = false;
     });
   }
 
-  Future<void> _saveSettings(
-    ComputerSettings settings,
-  ) async {
+  Future<void> _reloadGamingData() async {
+    final List<dynamic> values = await Future.wait<dynamic>(<Future<dynamic>>[
+      GameLibraryService.loadCurrentLibrary(),
+      GameLibraryService.loadCurrentActivity(),
+    ]);
+
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _games = values[0] as List<GameLibraryEntry>;
+      _activity = values[1] as List<GamingActivityEvent>;
+    });
+  }
+
+  Future<void> _saveSettings(ComputerSettings settings) async {
     if (mounted) {
       setState(() {
         _settings = settings;
       });
     }
 
-    await ComputerSettingsService.save(
-      settings,
-    );
+    await ComputerSettingsService.save(settings);
   }
 
   // ==========================================================================
   // PROFIL
   // ==========================================================================
 
-  Future<void> _openProfile() async {
-    await Navigator.push<void>(
-      context,
-      MaterialPageRoute<void>(
-        builder: (context) =>
-            const ProfileScreen(),
-      ),
-    );
-  }
-
-  Future<void> _openLibrary() async {
-    await Navigator.push<void>(
-      context,
-      MaterialPageRoute<void>(
-        builder: (context) =>
-            const GameLibraryScreen(),
-      ),
-    );
-
-    await _loadData();
-  }
-
   Future<void> _openCloudIdentity() async {
     await Navigator.push<void>(
       context,
       MaterialPageRoute<void>(
-        builder: (context) =>
-            const CloudIdentityScreen(),
+        builder: (context) => const CloudIdentityScreen(),
       ),
     );
 
@@ -174,13 +167,11 @@ class _ComputerScreenState extends State<ComputerScreen> {
   // ==========================================================================
 
   Future<void> _logout() async {
-    final bool? confirmed =
-        await showDialog<bool>(
+    final bool? confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) {
         return AlertDialog(
-          backgroundColor:
-              const Color(0xff21150e),
+          backgroundColor: const Color(0xff21150e),
           title: const Text(
             'Déconnexion',
             style: TextStyle(
@@ -190,31 +181,21 @@ class _ComputerScreenState extends State<ComputerScreen> {
           ),
           content: const Text(
             'Tu veux vraiment te déconnecter de Project XP ?',
-            style: TextStyle(
-              color: Colors.white70,
-            ),
+            style: TextStyle(color: Colors.white70),
           ),
           actions: [
             TextButton(
               onPressed: () {
-                Navigator.pop(
-                  dialogContext,
-                  false,
-                );
+                Navigator.pop(dialogContext, false);
               },
               child: const Text(
                 'ANNULER',
-                style: TextStyle(
-                  color: Colors.white54,
-                ),
+                style: TextStyle(color: Colors.white54),
               ),
             ),
             TextButton(
               onPressed: () {
-                Navigator.pop(
-                  dialogContext,
-                  true,
-                );
+                Navigator.pop(dialogContext, true);
               },
               child: const Text(
                 'SE DÉCONNECTER',
@@ -233,8 +214,7 @@ class _ComputerScreenState extends State<ComputerScreen> {
       return;
     }
 
-    await CloudIdentityService
-        .signOutPermanentCloudUser();
+    await CloudIdentityService.signOutPermanentCloudUser();
 
     await SessionService.logout();
 
@@ -243,10 +223,7 @@ class _ComputerScreenState extends State<ComputerScreen> {
     }
 
     Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute<void>(
-        builder: (context) =>
-            const SplashScreen(),
-      ),
+      MaterialPageRoute<void>(builder: (context) => const SplashScreen()),
       (route) => false,
     );
   }
@@ -259,89 +236,57 @@ class _ComputerScreenState extends State<ComputerScreen> {
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
-      backgroundColor:
-          const Color(0xff21150e),
+      backgroundColor: const Color(0xff21150e),
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(
-          top: Radius.circular(26),
-        ),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(26)),
       ),
       builder: (sheetContext) {
         return StatefulBuilder(
-          builder: (
-            context,
-            setSheetState,
-          ) {
-            Future<void> update(
-              ComputerSettings settings,
-            ) async {
+          builder: (context, setSheetState) {
+            Future<void> update(ComputerSettings settings) async {
               setSheetState(() {
                 _settings = settings;
               });
 
-              await _saveSettings(
-                settings,
-              );
+              await _saveSettings(settings);
             }
 
             return SafeArea(
               top: false,
               child: SingleChildScrollView(
-                padding:
-                    const EdgeInsets.fromLTRB(
-                  20,
-                  18,
-                  20,
-                  28,
-                ),
+                padding: const EdgeInsets.fromLTRB(20, 18, 20, 28),
                 child: Column(
-                  mainAxisSize:
-                      MainAxisSize.min,
+                  mainAxisSize: MainAxisSize.min,
                   children: [
                     _buildSheetHandle(),
 
-                    const SizedBox(
-                      height: 15,
-                    ),
+                    const SizedBox(height: 15),
 
                     const _SheetTitle(
                       icon: Icons.settings,
                       title: 'PARAMÈTRES',
                     ),
 
-                    const SizedBox(
-                      height: 12,
-                    ),
+                    const SizedBox(height: 12),
 
                     _TerminalSwitch(
                       icon: Icons.music_note,
                       title: 'Musique',
-                      subtitle:
-                          'Musique d’ambiance de Project XP',
-                      value:
-                          _settings.musicEnabled,
+                      subtitle: 'Musique d’ambiance de Project XP',
+                      value: _settings.musicEnabled,
                       onChanged: (value) async {
-                        await update(
-                          _settings.copyWith(
-                            musicEnabled: value,
-                          ),
-                        );
+                        await update(_settings.copyWith(musicEnabled: value));
                       },
                     ),
 
                     _TerminalSwitch(
                       icon: Icons.volume_up,
                       title: 'Effets sonores',
-                      subtitle:
-                          'Portails, boutons et interactions',
-                      value:
-                          _settings.soundEffectsEnabled,
+                      subtitle: 'Portails, boutons et interactions',
+                      value: _settings.soundEffectsEnabled,
                       onChanged: (value) async {
                         await update(
-                          _settings.copyWith(
-                            soundEffectsEnabled:
-                                value,
-                          ),
+                          _settings.copyWith(soundEffectsEnabled: value),
                         );
                       },
                     ),
@@ -349,16 +294,11 @@ class _ComputerScreenState extends State<ComputerScreen> {
                     _TerminalSwitch(
                       icon: Icons.vibration,
                       title: 'Vibrations',
-                      subtitle:
-                          'Retour haptique pendant les actions',
-                      value:
-                          _settings.vibrationEnabled,
+                      subtitle: 'Retour haptique pendant les actions',
+                      value: _settings.vibrationEnabled,
                       onChanged: (value) async {
                         await update(
-                          _settings.copyWith(
-                            vibrationEnabled:
-                                value,
-                          ),
+                          _settings.copyWith(vibrationEnabled: value),
                         );
                       },
                     ),
@@ -368,48 +308,30 @@ class _ComputerScreenState extends State<ComputerScreen> {
                       title: 'Notifications',
                       subtitle:
                           'Autoriser les notifications Android de Project XP',
-                      value:
-                          _settings.notificationsEnabled,
+                      value: _settings.notificationsEnabled,
                       onChanged: (value) async {
-                        // --------------------------------------------------
-                        // DÉSACTIVATION
-                        // --------------------------------------------------
-
                         if (!value) {
                           await update(
-                            _settings.copyWith(
-                              notificationsEnabled:
-                                  false,
-                            ),
+                            _settings.copyWith(notificationsEnabled: false),
                           );
 
                           return;
                         }
 
-                        // --------------------------------------------------
-                        // ACTIVATION + PERMISSION ANDROID
-                        // --------------------------------------------------
-
-                        final bool granted =
-                            await AppNotificationService
-                                .instance
-                                .requestPermission();
+                        final bool granted = await AppNotificationService
+                            .instance
+                            .requestPermission();
 
                         if (!granted) {
                           await update(
-                            _settings.copyWith(
-                              notificationsEnabled:
-                                  false,
-                            ),
+                            _settings.copyWith(notificationsEnabled: false),
                           );
 
                           if (!context.mounted) {
                             return;
                           }
 
-                          ScaffoldMessenger.of(
-                            context,
-                          ).showSnackBar(
+                          ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(
                               content: Text(
                                 'Permission de notifications refusée dans Android.',
@@ -421,14 +343,10 @@ class _ComputerScreenState extends State<ComputerScreen> {
                         }
 
                         await update(
-                          _settings.copyWith(
-                            notificationsEnabled:
-                                true,
-                          ),
+                          _settings.copyWith(notificationsEnabled: true),
                         );
 
-                        await AppNotificationService
-                            .instance
+                        await AppNotificationService.instance
                             .showTestNotification();
                       },
                     ),
@@ -450,92 +368,57 @@ class _ComputerScreenState extends State<ComputerScreen> {
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
-      backgroundColor:
-          const Color(0xff21150e),
+      backgroundColor: const Color(0xff21150e),
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(
-          top: Radius.circular(26),
-        ),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(26)),
       ),
       builder: (sheetContext) {
         return StatefulBuilder(
-          builder: (
-            context,
-            setSheetState,
-          ) {
-            Future<void> update(
-              ComputerSettings settings,
-            ) async {
+          builder: (context, setSheetState) {
+            Future<void> update(ComputerSettings settings) async {
               setSheetState(() {
                 _settings = settings;
               });
 
-              await _saveSettings(
-                settings,
-              );
+              await _saveSettings(settings);
             }
 
             return SafeArea(
               top: false,
               child: SingleChildScrollView(
-                padding:
-                    const EdgeInsets.fromLTRB(
-                  20,
-                  18,
-                  20,
-                  28,
-                ),
+                padding: const EdgeInsets.fromLTRB(20, 18, 20, 28),
                 child: Column(
-                  mainAxisSize:
-                      MainAxisSize.min,
+                  mainAxisSize: MainAxisSize.min,
                   children: [
                     _buildSheetHandle(),
 
-                    const SizedBox(
-                      height: 15,
-                    ),
+                    const SizedBox(height: 15),
 
-                    const _SheetTitle(
-                      icon: Icons.tune,
-                      title: 'OPTIONS',
-                    ),
+                    const _SheetTitle(icon: Icons.tune, title: 'OPTIONS'),
 
-                    const SizedBox(
-                      height: 12,
-                    ),
+                    const SizedBox(height: 12),
 
                     _TerminalSwitch(
                       icon: Icons.animation,
-                      title:
-                          'Réduire les animations',
-                      subtitle:
-                          'Prépare un mode plus léger et plus rapide',
-                      value:
-                          _settings.reducedAnimations,
+                      title: 'Réduire les animations',
+                      subtitle: 'Prépare un mode plus léger et plus rapide',
+                      value: _settings.reducedAnimations,
                       onChanged: (value) async {
                         await update(
-                          _settings.copyWith(
-                            reducedAnimations:
-                                value,
-                          ),
+                          _settings.copyWith(reducedAnimations: value),
                         );
                       },
                     ),
 
                     _TerminalSwitch(
-                      icon:
-                          Icons.verified_user_outlined,
+                      icon: Icons.verified_user_outlined,
                       title: 'Confirmations',
                       subtitle:
                           'Demander confirmation avant les actions sensibles',
-                      value:
-                          _settings.confirmationsEnabled,
+                      value: _settings.confirmationsEnabled,
                       onChanged: (value) async {
                         await update(
-                          _settings.copyWith(
-                            confirmationsEnabled:
-                                value,
-                          ),
+                          _settings.copyWith(confirmationsEnabled: value),
                         );
                       },
                     ),
@@ -543,16 +426,11 @@ class _ComputerScreenState extends State<ComputerScreen> {
                     _TerminalSwitch(
                       icon: Icons.auto_awesome,
                       title: 'Conseils de Bjorn',
-                      subtitle:
-                          'Afficher les aides et conseils du guide',
-                      value:
-                          _settings.bjornTipsEnabled,
+                      subtitle: 'Afficher les aides et conseils du guide',
+                      value: _settings.bjornTipsEnabled,
                       onChanged: (value) async {
                         await update(
-                          _settings.copyWith(
-                            bjornTipsEnabled:
-                                value,
-                          ),
+                          _settings.copyWith(bjornTipsEnabled: value),
                         );
                       },
                     ),
@@ -572,23 +450,19 @@ class _ComputerScreenState extends State<ComputerScreen> {
 
   Future<void> _refreshSecurityState() async {
     final bool biometricAvailable =
-        await BiometricAuthService
-            .isBiometricAvailable();
+        await BiometricAuthService.isBiometricAvailable();
 
     final bool biometricEnabled =
-        await BiometricAuthService
-            .isEnabledForCurrentAccount();
+        await BiometricAuthService.isEnabledForCurrentAccount();
 
     if (!mounted) {
       return;
     }
 
     setState(() {
-      _biometricAvailable =
-          biometricAvailable;
+      _biometricAvailable = biometricAvailable;
 
-      _biometricEnabled =
-          biometricEnabled;
+      _biometricEnabled = biometricEnabled;
     });
   }
 
@@ -599,27 +473,20 @@ class _ComputerScreenState extends State<ComputerScreen> {
       return;
     }
 
-    bool biometricEnabled =
-        _biometricEnabled;
+    bool biometricEnabled = _biometricEnabled;
 
     bool biometricBusy = false;
 
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
-      backgroundColor:
-          const Color(0xff21150e),
+      backgroundColor: const Color(0xff21150e),
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(
-          top: Radius.circular(26),
-        ),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(26)),
       ),
       builder: (sheetContext) {
         return StatefulBuilder(
-          builder: (
-            context,
-            setSheetState,
-          ) {
+          builder: (context, setSheetState) {
             Future<void> disableBiometrics() async {
               if (biometricBusy) {
                 return;
@@ -629,65 +496,45 @@ class _ComputerScreenState extends State<ComputerScreen> {
                 biometricBusy = true;
               });
 
-              await BiometricAuthService
-                  .disableForCurrentAccount();
+              await BiometricAuthService.disableForCurrentAccount();
 
               final bool enabled =
-                  await BiometricAuthService
-                      .isEnabledForCurrentAccount();
+                  await BiometricAuthService.isEnabledForCurrentAccount();
 
-              if (!mounted ||
-                  !sheetContext.mounted) {
+              if (!mounted || !sheetContext.mounted) {
                 return;
               }
 
               setState(() {
-                _biometricEnabled =
-                    enabled;
+                _biometricEnabled = enabled;
               });
 
               setSheetState(() {
-                biometricEnabled =
-                    enabled;
+                biometricEnabled = enabled;
 
                 biometricBusy = false;
               });
 
-              _showMessage(
-                'Connexion biométrique désactivée.',
-              );
+              _showMessage('Connexion biométrique désactivée.');
             }
 
             return SafeArea(
               top: false,
               child: SingleChildScrollView(
-                padding:
-                    const EdgeInsets.fromLTRB(
-                  20,
-                  18,
-                  20,
-                  28,
-                ),
+                padding: const EdgeInsets.fromLTRB(20, 18, 20, 28),
                 child: Column(
-                  mainAxisSize:
-                      MainAxisSize.min,
+                  mainAxisSize: MainAxisSize.min,
                   children: [
                     _buildSheetHandle(),
 
-                    const SizedBox(
-                      height: 15,
-                    ),
+                    const SizedBox(height: 15),
 
                     const _SheetTitle(
-                      icon:
-                          Icons.manage_accounts,
-                      title:
-                          'COMPTE & SÉCURITÉ',
+                      icon: Icons.manage_accounts,
+                      title: 'COMPTE & SÉCURITÉ',
                     ),
 
-                    const SizedBox(
-                      height: 18,
-                    ),
+                    const SizedBox(height: 18),
 
                     _AccountLine(
                       icon: Icons.person_outline,
@@ -696,159 +543,103 @@ class _ComputerScreenState extends State<ComputerScreen> {
                     ),
 
                     if (_email.isNotEmpty) ...[
-                      const SizedBox(
-                        height: 10,
-                      ),
+                      const SizedBox(height: 10),
                       _AccountLine(
-                        icon:
-                            Icons.email_outlined,
+                        icon: Icons.email_outlined,
                         label: 'E-mail',
                         value: _email,
                       ),
                     ],
 
-                    const SizedBox(
-                      height: 18,
-                    ),
+                    const SizedBox(height: 18),
 
-                    const _SecuritySectionLabel(
-                      label: 'SÉCURITÉ',
-                    ),
+                    const _SecuritySectionLabel(label: 'SÉCURITÉ'),
 
-                    const SizedBox(
-                      height: 10,
-                    ),
+                    const SizedBox(height: 10),
 
                     _AccountActionButton(
-                      icon:
-                          Icons.cloud_outlined,
-                      title:
-                          'Compte Cloud Project XP',
-                      subtitle:
-                          _cloudIdentityStatus?.isPermanent == true
-                              ? 'Actif • identité récupérable sur plusieurs appareils'
-                              : 'Local • activer la sauvegarde d’identité Cloud',
+                      icon: Icons.cloud_outlined,
+                      title: 'Compte Cloud Project XP',
+                      subtitle: _cloudIdentityStatus?.isPermanent == true
+                          ? 'Actif • identité récupérable sur plusieurs appareils'
+                          : 'Local • activer la sauvegarde d’identité Cloud',
                       onTap: () {
-                        Navigator.pop(
-                          sheetContext,
-                        );
+                        Navigator.pop(sheetContext);
 
                         _openCloudIdentity();
                       },
                     ),
 
-                    const SizedBox(
-                      height: 10,
-                    ),
+                    const SizedBox(height: 10),
 
                     _BiometricSecurityTile(
-                      available:
-                          _biometricAvailable,
-                      enabled:
-                          biometricEnabled,
-                      busy:
-                          biometricBusy,
-                      onChanged:
-                          !_biometricAvailable ||
-                                  biometricBusy
-                              ? null
-                              : (value) async {
-                                  if (value) {
-                                    Navigator.pop(
-                                      sheetContext,
-                                    );
+                      available: _biometricAvailable,
+                      enabled: biometricEnabled,
+                      busy: biometricBusy,
+                      onChanged: !_biometricAvailable || biometricBusy
+                          ? null
+                          : (value) async {
+                              if (value) {
+                                Navigator.pop(sheetContext);
 
-                                    await _enableBiometricsFromAccount();
-                                    return;
-                                  }
+                                await _enableBiometricsFromAccount();
+                                return;
+                              }
 
-                                  await disableBiometrics();
-                                },
+                              await disableBiometrics();
+                            },
                     ),
 
-                    const SizedBox(
-                      height: 10,
-                    ),
+                    const SizedBox(height: 10),
 
                     _AccountActionButton(
-                      icon:
-                          Icons.password,
-                      title:
-                          'Changer le mot de passe',
-                      subtitle:
-                          'Le mot de passe actuel sera demandé',
+                      icon: Icons.password,
+                      title: 'Changer le mot de passe',
+                      subtitle: 'Le mot de passe actuel sera demandé',
                       onTap: () {
-                        Navigator.pop(
-                          sheetContext,
-                        );
+                        Navigator.pop(sheetContext);
 
                         _changePassword();
                       },
                     ),
 
-                    const SizedBox(
-                      height: 10,
-                    ),
+                    const SizedBox(height: 10),
 
                     _AccountActionButton(
-                      icon:
-                          Icons.alternate_email,
-                      title:
-                          'Changer l’adresse e-mail',
-                      subtitle:
-                          'Le mot de passe actuel sera demandé',
+                      icon: Icons.alternate_email,
+                      title: 'Changer l’adresse e-mail',
+                      subtitle: 'Le mot de passe actuel sera demandé',
                       onTap: () {
-                        Navigator.pop(
-                          sheetContext,
-                        );
+                        Navigator.pop(sheetContext);
 
                         _changeEmail();
                       },
                     ),
 
-                    const SizedBox(
-                      height: 24,
-                    ),
+                    const SizedBox(height: 24),
 
                     SizedBox(
                       width: double.infinity,
                       height: 52,
-                      child:
-                          OutlinedButton.icon(
+                      child: OutlinedButton.icon(
                         onPressed: () {
-                          Navigator.pop(
-                            sheetContext,
-                          );
+                          Navigator.pop(sheetContext);
 
                           _logout();
                         },
-                        icon: const Icon(
-                          Icons.logout,
-                        ),
+                        icon: const Icon(Icons.logout),
                         label: const Text(
                           'SE DÉCONNECTER',
                           style: TextStyle(
-                            fontWeight:
-                                FontWeight.bold,
+                            fontWeight: FontWeight.bold,
                             letterSpacing: 1,
                           ),
                         ),
-                        style:
-                            OutlinedButton
-                                .styleFrom(
-                          foregroundColor:
-                              Colors.redAccent,
-                          side:
-                              const BorderSide(
-                            color:
-                                Colors.redAccent,
-                          ),
-                          shape:
-                              RoundedRectangleBorder(
-                            borderRadius:
-                                BorderRadius.circular(
-                              14,
-                            ),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.redAccent,
+                          side: const BorderSide(color: Colors.redAccent),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
                           ),
                         ),
                       ),
@@ -871,22 +662,17 @@ class _ComputerScreenState extends State<ComputerScreen> {
       return;
     }
 
-    final String? currentPassword =
-        await _askCurrentPassword(
-      title:
-          'ACTIVER LA BIOMÉTRIE',
+    final String? currentPassword = await _askCurrentPassword(
+      title: 'ACTIVER LA BIOMÉTRIE',
       message:
           'Entre ton mot de passe Project XP avant d’autoriser la biométrie sur cet appareil.',
     );
 
-    if (currentPassword == null ||
-        !mounted) {
+    if (currentPassword == null || !mounted) {
       return;
     }
 
-    final bool passwordValid =
-        await AuthService
-            .verifyCurrentPassword(
+    final bool passwordValid = await AuthService.verifyCurrentPassword(
       currentPassword,
     );
 
@@ -895,15 +681,11 @@ class _ComputerScreenState extends State<ComputerScreen> {
     }
 
     if (!passwordValid) {
-      _showMessage(
-        'Mot de passe incorrect.',
-      );
+      _showMessage('Mot de passe incorrect.');
       return;
     }
 
-    final bool enabled =
-        await BiometricAuthService
-            .enableForCurrentAccount();
+    final bool enabled = await BiometricAuthService.enableForCurrentAccount();
 
     if (!mounted) {
       return;
@@ -923,22 +705,17 @@ class _ComputerScreenState extends State<ComputerScreen> {
   }
 
   Future<void> _changePassword() async {
-    final _PasswordChangeInput? input =
-        await _askPasswordChange();
+    final _PasswordChangeInput? input = await _askPasswordChange();
 
-    if (input == null ||
-        !mounted) {
+    if (input == null || !mounted) {
       return;
     }
 
     final AuthPasswordChangeResult result =
-        await AuthService
-            .changeCurrentPassword(
-      currentPassword:
-          input.currentPassword,
-      newPassword:
-          input.newPassword,
-    );
+        await AuthService.changeCurrentPassword(
+          currentPassword: input.currentPassword,
+          newPassword: input.newPassword,
+        );
 
     if (!mounted) {
       return;
@@ -946,56 +723,40 @@ class _ComputerScreenState extends State<ComputerScreen> {
 
     switch (result) {
       case AuthPasswordChangeResult.success:
-        _showMessage(
-          'Mot de passe modifié avec succès.',
-        );
+        _showMessage('Mot de passe modifié avec succès.');
         return;
 
       case AuthPasswordChangeResult.invalidCurrentPassword:
-        _showMessage(
-          'Le mot de passe actuel est incorrect.',
-        );
+        _showMessage('Le mot de passe actuel est incorrect.');
         return;
 
       case AuthPasswordChangeResult.weakNewPassword:
         _showMessage(
-          AuthService.validatePassword(
-                input.newPassword,
-              ) ??
+          AuthService.validatePassword(input.newPassword) ??
               'Le nouveau mot de passe ne respecte pas les règles de sécurité.',
         );
         return;
 
       case AuthPasswordChangeResult.sameAsCurrentPassword:
-        _showMessage(
-          'Choisis un nouveau mot de passe différent de l’actuel.',
-        );
+        _showMessage('Choisis un nouveau mot de passe différent de l’actuel.');
         return;
 
       case AuthPasswordChangeResult.accountNotFound:
-        _showMessage(
-          'Impossible de retrouver le compte actif.',
-        );
+        _showMessage('Impossible de retrouver le compte actif.');
         return;
     }
   }
 
   Future<void> _changeEmail() async {
-    final _EmailChangeInput? input =
-        await _askEmailChange();
+    final _EmailChangeInput? input = await _askEmailChange();
 
-    if (input == null ||
-        !mounted) {
+    if (input == null || !mounted) {
       return;
     }
 
-    final AuthEmailChangeResult result =
-        await AuthService
-            .changeCurrentEmail(
-      currentPassword:
-          input.currentPassword,
-      newEmail:
-          input.newEmail,
+    final AuthEmailChangeResult result = await AuthService.changeCurrentEmail(
+      currentPassword: input.currentPassword,
+      newEmail: input.newEmail,
     );
 
     if (!mounted) {
@@ -1004,46 +765,33 @@ class _ComputerScreenState extends State<ComputerScreen> {
 
     switch (result) {
       case AuthEmailChangeResult.success:
-        final String? email =
-            await AuthService
-                .getCurrentEmail();
+        final String? email = await AuthService.getCurrentEmail();
 
         if (!mounted) {
           return;
         }
 
         setState(() {
-          _email =
-              email?.trim() ?? '';
+          _email = email?.trim() ?? '';
         });
 
-        _showMessage(
-          'Adresse e-mail modifiée avec succès.',
-        );
+        _showMessage('Adresse e-mail modifiée avec succès.');
         return;
 
       case AuthEmailChangeResult.invalidCurrentPassword:
-        _showMessage(
-          'Le mot de passe actuel est incorrect.',
-        );
+        _showMessage('Le mot de passe actuel est incorrect.');
         return;
 
       case AuthEmailChangeResult.invalidEmail:
-        _showMessage(
-          'Entre une adresse e-mail valide.',
-        );
+        _showMessage('Entre une adresse e-mail valide.');
         return;
 
       case AuthEmailChangeResult.emailAlreadyUsed:
-        _showMessage(
-          'Cette adresse e-mail est déjà utilisée.',
-        );
+        _showMessage('Cette adresse e-mail est déjà utilisée.');
         return;
 
       case AuthEmailChangeResult.accountNotFound:
-        _showMessage(
-          'Impossible de retrouver le compte actif.',
-        );
+        _showMessage('Impossible de retrouver le compte actif.');
         return;
     }
   }
@@ -1052,8 +800,7 @@ class _ComputerScreenState extends State<ComputerScreen> {
     required String title,
     required String message,
   }) {
-    final GlobalKey<FormState> formKey =
-        GlobalKey<FormState>();
+    final GlobalKey<FormState> formKey = GlobalKey<FormState>();
 
     String password = '';
     bool hidePassword = true;
@@ -1063,90 +810,57 @@ class _ComputerScreenState extends State<ComputerScreen> {
       barrierDismissible: false,
       builder: (dialogContext) {
         return StatefulBuilder(
-          builder: (
-            context,
-            setDialogState,
-          ) {
+          builder: (context, setDialogState) {
             return AlertDialog(
-              backgroundColor:
-                  const Color(0xff21150e),
+              backgroundColor: const Color(0xff21150e),
               title: Text(
                 title,
-                textAlign:
-                    TextAlign.center,
-                style:
-                    const TextStyle(
-                  color:
-                      Color(
-                    0xffffc857,
-                  ),
-                  fontWeight:
-                      FontWeight.bold,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Color(0xffffc857),
+                  fontWeight: FontWeight.bold,
                 ),
               ),
               content: Form(
                 key: formKey,
-                child:
-                    SingleChildScrollView(
+                child: SingleChildScrollView(
                   child: Column(
-                    mainAxisSize:
-                        MainAxisSize.min,
+                    mainAxisSize: MainAxisSize.min,
                     children: [
                       Text(
                         message,
-                        style:
-                            const TextStyle(
-                          color:
-                              Colors.white70,
+                        style: const TextStyle(
+                          color: Colors.white70,
                           height: 1.4,
                         ),
                       ),
-                      const SizedBox(
-                        height: 16,
-                      ),
+                      const SizedBox(height: 16),
                       TextFormField(
                         autofocus: true,
-                        obscureText:
-                            hidePassword,
-                        onChanged:
-                            (value) {
-                          password =
-                              value;
+                        obscureText: hidePassword,
+                        onChanged: (value) {
+                          password = value;
                         },
-                        style:
-                            const TextStyle(
-                          color:
-                              Colors.white,
-                        ),
-                        decoration:
-                            _securityInputDecoration(
-                          label:
-                              'Mot de passe actuel',
-                          icon:
-                              Icons.lock_outline,
-                          suffix:
-                              IconButton(
+                        style: const TextStyle(color: Colors.white),
+                        decoration: _securityInputDecoration(
+                          label: 'Mot de passe actuel',
+                          icon: Icons.lock_outline,
+                          suffix: IconButton(
                             onPressed: () {
-                              setDialogState(
-                                () {
-                                  hidePassword =
-                                      !hidePassword;
-                                },
-                              );
+                              setDialogState(() {
+                                hidePassword = !hidePassword;
+                              });
                             },
                             icon: Icon(
                               hidePassword
                                   ? Icons.visibility
                                   : Icons.visibility_off,
-                              color:
-                                  Colors.white54,
+                              color: Colors.white54,
                             ),
                           ),
                         ),
-                        validator:
-                            (value) {
-                          if ((value ?? '')
-                              .isEmpty) {
+                        validator: (value) {
+                          if ((value ?? '').isEmpty) {
                             return 'Entre ton mot de passe actuel.';
                           }
 
@@ -1160,43 +874,26 @@ class _ComputerScreenState extends State<ComputerScreen> {
               actions: [
                 TextButton(
                   onPressed: () {
-                    Navigator.pop(
-                      dialogContext,
-                    );
+                    Navigator.pop(dialogContext);
                   },
                   child: const Text(
                     'ANNULER',
-                    style:
-                        TextStyle(
-                      color:
-                          Colors.white54,
-                    ),
+                    style: TextStyle(color: Colors.white54),
                   ),
                 ),
                 TextButton(
                   onPressed: () {
-                    if (!(formKey
-                            .currentState
-                            ?.validate() ??
-                        false)) {
+                    if (!(formKey.currentState?.validate() ?? false)) {
                       return;
                     }
 
-                    Navigator.pop(
-                      dialogContext,
-                      password,
-                    );
+                    Navigator.pop(dialogContext, password);
                   },
                   child: const Text(
                     'CONFIRMER',
-                    style:
-                        TextStyle(
-                      color:
-                          Color(
-                        0xffffc857,
-                      ),
-                      fontWeight:
-                          FontWeight.bold,
+                    style: TextStyle(
+                      color: Color(0xffffc857),
+                      fontWeight: FontWeight.bold,
                     ),
                   ),
                 ),
@@ -1208,10 +905,8 @@ class _ComputerScreenState extends State<ComputerScreen> {
     );
   }
 
-  Future<_PasswordChangeInput?>
-      _askPasswordChange() {
-    final GlobalKey<FormState> formKey =
-        GlobalKey<FormState>();
+  Future<_PasswordChangeInput?> _askPasswordChange() {
+    final GlobalKey<FormState> formKey = GlobalKey<FormState>();
 
     String currentPassword = '';
     String newPassword = '';
@@ -1220,84 +915,53 @@ class _ComputerScreenState extends State<ComputerScreen> {
     bool hideNew = true;
     bool hideConfirmation = true;
 
-    return showDialog<
-        _PasswordChangeInput>(
+    return showDialog<_PasswordChangeInput>(
       context: context,
       barrierDismissible: false,
       builder: (dialogContext) {
         return StatefulBuilder(
-          builder: (
-            context,
-            setDialogState,
-          ) {
+          builder: (context, setDialogState) {
             return AlertDialog(
-              backgroundColor:
-                  const Color(0xff21150e),
+              backgroundColor: const Color(0xff21150e),
               title: const Text(
                 'CHANGER LE MOT DE PASSE',
-                textAlign:
-                    TextAlign.center,
-                style:
-                    TextStyle(
-                  color:
-                      Color(
-                    0xffffc857,
-                  ),
-                  fontWeight:
-                      FontWeight.bold,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Color(0xffffc857),
+                  fontWeight: FontWeight.bold,
                 ),
               ),
               content: Form(
                 key: formKey,
-                child:
-                    SingleChildScrollView(
+                child: SingleChildScrollView(
                   child: Column(
-                    mainAxisSize:
-                        MainAxisSize.min,
+                    mainAxisSize: MainAxisSize.min,
                     children: [
                       TextFormField(
-                        obscureText:
-                            hideCurrent,
-                        onChanged:
-                            (value) {
-                          currentPassword =
-                              value;
+                        obscureText: hideCurrent,
+                        onChanged: (value) {
+                          currentPassword = value;
                         },
-                        style:
-                            const TextStyle(
-                          color:
-                              Colors.white,
-                        ),
-                        decoration:
-                            _securityInputDecoration(
-                          label:
-                              'Mot de passe actuel',
-                          icon:
-                              Icons.lock_outline,
-                          suffix:
-                              IconButton(
+                        style: const TextStyle(color: Colors.white),
+                        decoration: _securityInputDecoration(
+                          label: 'Mot de passe actuel',
+                          icon: Icons.lock_outline,
+                          suffix: IconButton(
                             onPressed: () {
-                              setDialogState(
-                                () {
-                                  hideCurrent =
-                                      !hideCurrent;
-                                },
-                              );
+                              setDialogState(() {
+                                hideCurrent = !hideCurrent;
+                              });
                             },
-                            icon:
-                                Icon(
+                            icon: Icon(
                               hideCurrent
                                   ? Icons.visibility
                                   : Icons.visibility_off,
-                              color:
-                                  Colors.white54,
+                              color: Colors.white54,
                             ),
                           ),
                         ),
-                        validator:
-                            (value) {
-                          if ((value ?? '')
-                              .isEmpty) {
+                        validator: (value) {
+                          if ((value ?? '').isEmpty) {
                             return 'Entre ton mot de passe actuel.';
                           }
 
@@ -1305,100 +969,58 @@ class _ComputerScreenState extends State<ComputerScreen> {
                         },
                       ),
 
-                      const SizedBox(
-                        height: 14,
-                      ),
+                      const SizedBox(height: 14),
 
                       TextFormField(
-                        obscureText:
-                            hideNew,
-                        onChanged:
-                            (value) {
-                          newPassword =
-                              value;
+                        obscureText: hideNew,
+                        onChanged: (value) {
+                          newPassword = value;
                         },
-                        style:
-                            const TextStyle(
-                          color:
-                              Colors.white,
-                        ),
-                        decoration:
-                            _securityInputDecoration(
-                          label:
-                              'Nouveau mot de passe',
-                          icon:
-                              Icons.password,
-                          suffix:
-                              IconButton(
+                        style: const TextStyle(color: Colors.white),
+                        decoration: _securityInputDecoration(
+                          label: 'Nouveau mot de passe',
+                          icon: Icons.password,
+                          suffix: IconButton(
                             onPressed: () {
-                              setDialogState(
-                                () {
-                                  hideNew =
-                                      !hideNew;
-                                },
-                              );
+                              setDialogState(() {
+                                hideNew = !hideNew;
+                              });
                             },
-                            icon:
-                                Icon(
-                              hideNew
-                                  ? Icons.visibility
-                                  : Icons.visibility_off,
-                              color:
-                                  Colors.white54,
+                            icon: Icon(
+                              hideNew ? Icons.visibility : Icons.visibility_off,
+                              color: Colors.white54,
                             ),
                           ),
                         ),
-                        validator:
-                            (value) {
-                          return AuthService
-                              .validatePassword(
-                            value ?? '',
-                          );
+                        validator: (value) {
+                          return AuthService.validatePassword(value ?? '');
                         },
                       ),
 
-                      const SizedBox(
-                        height: 14,
-                      ),
+                      const SizedBox(height: 14),
 
                       TextFormField(
-                        obscureText:
-                            hideConfirmation,
-                        style:
-                            const TextStyle(
-                          color:
-                              Colors.white,
-                        ),
-                        decoration:
-                            _securityInputDecoration(
-                          label:
-                              'Confirmer le nouveau mot de passe',
-                          icon:
-                              Icons.lock_reset,
-                          suffix:
-                              IconButton(
+                        obscureText: hideConfirmation,
+                        style: const TextStyle(color: Colors.white),
+                        decoration: _securityInputDecoration(
+                          label: 'Confirmer le nouveau mot de passe',
+                          icon: Icons.lock_reset,
+                          suffix: IconButton(
                             onPressed: () {
-                              setDialogState(
-                                () {
-                                  hideConfirmation =
-                                      !hideConfirmation;
-                                },
-                              );
+                              setDialogState(() {
+                                hideConfirmation = !hideConfirmation;
+                              });
                             },
-                            icon:
-                                Icon(
+                            icon: Icon(
                               hideConfirmation
                                   ? Icons.visibility
                                   : Icons.visibility_off,
-                              color:
-                                  Colors.white54,
+                              color: Colors.white54,
                             ),
                           ),
                         ),
-                        validator:
-                            (value) {
-                          if ((value ?? '') !=
-                              newPassword) {
+                        validator: (value) {
+                          if ((value ?? '') != newPassword) {
                             return 'Les mots de passe ne correspondent pas.';
                           }
 
@@ -1406,9 +1028,7 @@ class _ComputerScreenState extends State<ComputerScreen> {
                         },
                       ),
 
-                      const SizedBox(
-                        height: 14,
-                      ),
+                      const SizedBox(height: 14),
 
                       const _PasswordRulesCard(),
                     ],
@@ -1418,48 +1038,32 @@ class _ComputerScreenState extends State<ComputerScreen> {
               actions: [
                 TextButton(
                   onPressed: () {
-                    Navigator.pop(
-                      dialogContext,
-                    );
+                    Navigator.pop(dialogContext);
                   },
                   child: const Text(
                     'ANNULER',
-                    style:
-                        TextStyle(
-                      color:
-                          Colors.white54,
-                    ),
+                    style: TextStyle(color: Colors.white54),
                   ),
                 ),
                 TextButton(
                   onPressed: () {
-                    if (!(formKey
-                            .currentState
-                            ?.validate() ??
-                        false)) {
+                    if (!(formKey.currentState?.validate() ?? false)) {
                       return;
                     }
 
                     Navigator.pop(
                       dialogContext,
                       _PasswordChangeInput(
-                        currentPassword:
-                            currentPassword,
-                        newPassword:
-                            newPassword,
+                        currentPassword: currentPassword,
+                        newPassword: newPassword,
                       ),
                     );
                   },
                   child: const Text(
                     'MODIFIER',
-                    style:
-                        TextStyle(
-                      color:
-                          Color(
-                        0xffffc857,
-                      ),
-                      fontWeight:
-                          FontWeight.bold,
+                    style: TextStyle(
+                      color: Color(0xffffc857),
+                      fontWeight: FontWeight.bold,
                     ),
                   ),
                 ),
@@ -1471,10 +1075,8 @@ class _ComputerScreenState extends State<ComputerScreen> {
     );
   }
 
-  Future<_EmailChangeInput?>
-      _askEmailChange() {
-    final GlobalKey<FormState> formKey =
-        GlobalKey<FormState>();
+  Future<_EmailChangeInput?> _askEmailChange() {
+    final GlobalKey<FormState> formKey = GlobalKey<FormState>();
 
     String newEmail = _email;
     String currentPassword = '';
@@ -1485,72 +1087,41 @@ class _ComputerScreenState extends State<ComputerScreen> {
       barrierDismissible: false,
       builder: (dialogContext) {
         return StatefulBuilder(
-          builder: (
-            context,
-            setDialogState,
-          ) {
+          builder: (context, setDialogState) {
             return AlertDialog(
-              backgroundColor:
-                  const Color(0xff21150e),
+              backgroundColor: const Color(0xff21150e),
               title: const Text(
                 'CHANGER L’ADRESSE E-MAIL',
-                textAlign:
-                    TextAlign.center,
-                style:
-                    TextStyle(
-                  color:
-                      Color(
-                    0xffffc857,
-                  ),
-                  fontWeight:
-                      FontWeight.bold,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Color(0xffffc857),
+                  fontWeight: FontWeight.bold,
                 ),
               ),
               content: Form(
                 key: formKey,
-                child:
-                    SingleChildScrollView(
+                child: SingleChildScrollView(
                   child: Column(
-                    mainAxisSize:
-                        MainAxisSize.min,
+                    mainAxisSize: MainAxisSize.min,
                     children: [
                       TextFormField(
-                        initialValue:
-                            _email,
-                        keyboardType:
-                            TextInputType
-                                .emailAddress,
-                        autocorrect:
-                            false,
-                        onChanged:
-                            (value) {
-                          newEmail =
-                              value;
+                        initialValue: _email,
+                        keyboardType: TextInputType.emailAddress,
+                        autocorrect: false,
+                        onChanged: (value) {
+                          newEmail = value;
                         },
-                        style:
-                            const TextStyle(
-                          color:
-                              Colors.white,
+                        style: const TextStyle(color: Colors.white),
+                        decoration: _securityInputDecoration(
+                          label: 'Nouvelle adresse e-mail',
+                          icon: Icons.alternate_email,
                         ),
-                        decoration:
-                            _securityInputDecoration(
-                          label:
-                              'Nouvelle adresse e-mail',
-                          icon:
-                              Icons.alternate_email,
-                        ),
-                        validator:
-                            (value) {
-                          final String email =
-                              value
-                                      ?.trim() ??
-                                  '';
+                        validator: (value) {
+                          final String email = value?.trim() ?? '';
 
                           if (!RegExp(
                             r'^[^@\s]+@[^@\s]+\.[^@\s]+$',
-                          ).hasMatch(
-                            email,
-                          )) {
+                          ).hasMatch(email)) {
                             return 'Entre une adresse e-mail valide.';
                           }
 
@@ -1558,53 +1129,33 @@ class _ComputerScreenState extends State<ComputerScreen> {
                         },
                       ),
 
-                      const SizedBox(
-                        height: 14,
-                      ),
+                      const SizedBox(height: 14),
 
                       TextFormField(
-                        obscureText:
-                            hidePassword,
-                        onChanged:
-                            (value) {
-                          currentPassword =
-                              value;
+                        obscureText: hidePassword,
+                        onChanged: (value) {
+                          currentPassword = value;
                         },
-                        style:
-                            const TextStyle(
-                          color:
-                              Colors.white,
-                        ),
-                        decoration:
-                            _securityInputDecoration(
-                          label:
-                              'Mot de passe actuel',
-                          icon:
-                              Icons.lock_outline,
-                          suffix:
-                              IconButton(
+                        style: const TextStyle(color: Colors.white),
+                        decoration: _securityInputDecoration(
+                          label: 'Mot de passe actuel',
+                          icon: Icons.lock_outline,
+                          suffix: IconButton(
                             onPressed: () {
-                              setDialogState(
-                                () {
-                                  hidePassword =
-                                      !hidePassword;
-                                },
-                              );
+                              setDialogState(() {
+                                hidePassword = !hidePassword;
+                              });
                             },
-                            icon:
-                                Icon(
+                            icon: Icon(
                               hidePassword
                                   ? Icons.visibility
                                   : Icons.visibility_off,
-                              color:
-                                  Colors.white54,
+                              color: Colors.white54,
                             ),
                           ),
                         ),
-                        validator:
-                            (value) {
-                          if ((value ?? '')
-                              .isEmpty) {
+                        validator: (value) {
+                          if ((value ?? '').isEmpty) {
                             return 'Entre ton mot de passe actuel.';
                           }
 
@@ -1618,48 +1169,32 @@ class _ComputerScreenState extends State<ComputerScreen> {
               actions: [
                 TextButton(
                   onPressed: () {
-                    Navigator.pop(
-                      dialogContext,
-                    );
+                    Navigator.pop(dialogContext);
                   },
                   child: const Text(
                     'ANNULER',
-                    style:
-                        TextStyle(
-                      color:
-                          Colors.white54,
-                    ),
+                    style: TextStyle(color: Colors.white54),
                   ),
                 ),
                 TextButton(
                   onPressed: () {
-                    if (!(formKey
-                            .currentState
-                            ?.validate() ??
-                        false)) {
+                    if (!(formKey.currentState?.validate() ?? false)) {
                       return;
                     }
 
                     Navigator.pop(
                       dialogContext,
                       _EmailChangeInput(
-                        newEmail:
-                            newEmail,
-                        currentPassword:
-                            currentPassword,
+                        newEmail: newEmail,
+                        currentPassword: currentPassword,
                       ),
                     );
                   },
                   child: const Text(
                     'MODIFIER',
-                    style:
-                        TextStyle(
-                      color:
-                          Color(
-                        0xffffc857,
-                      ),
-                      fontWeight:
-                          FontWeight.bold,
+                    style: TextStyle(
+                      color: Color(0xffffc857),
+                      fontWeight: FontWeight.bold,
                     ),
                   ),
                 ),
@@ -1671,103 +1206,45 @@ class _ComputerScreenState extends State<ComputerScreen> {
     );
   }
 
-  InputDecoration
-      _securityInputDecoration({
+  InputDecoration _securityInputDecoration({
     required String label,
     required IconData icon,
     Widget? suffix,
   }) {
     return InputDecoration(
       labelText: label,
-      labelStyle:
-          const TextStyle(
-        color:
-            Colors.white60,
-      ),
-      prefixIcon:
-          Icon(
-        icon,
-        color:
-            const Color(
-          0xffffc857,
-        ),
-      ),
-      suffixIcon:
-          suffix,
+      labelStyle: const TextStyle(color: Colors.white60),
+      prefixIcon: Icon(icon, color: const Color(0xffffc857)),
+      suffixIcon: suffix,
       filled: true,
-      fillColor:
-          const Color(
-        0xff160e09,
+      fillColor: const Color(0xff160e09),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(13),
+        borderSide: const BorderSide(color: Colors.white12),
       ),
-      enabledBorder:
-          OutlineInputBorder(
-        borderRadius:
-            BorderRadius.circular(
-          13,
-        ),
-        borderSide:
-            const BorderSide(
-          color:
-              Colors.white12,
-        ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(13),
+        borderSide: const BorderSide(color: Color(0xffffc857), width: 1.5),
       ),
-      focusedBorder:
-          OutlineInputBorder(
-        borderRadius:
-            BorderRadius.circular(
-          13,
-        ),
-        borderSide:
-            const BorderSide(
-          color:
-              Color(
-            0xffffc857,
-          ),
-          width: 1.5,
-        ),
+      errorBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(13),
+        borderSide: const BorderSide(color: Colors.redAccent),
       ),
-      errorBorder:
-          OutlineInputBorder(
-        borderRadius:
-            BorderRadius.circular(
-          13,
-        ),
-        borderSide:
-            const BorderSide(
-          color:
-              Colors.redAccent,
-        ),
-      ),
-      focusedErrorBorder:
-          OutlineInputBorder(
-        borderRadius:
-            BorderRadius.circular(
-          13,
-        ),
-        borderSide:
-            const BorderSide(
-          color:
-              Colors.redAccent,
-          width: 1.5,
-        ),
+      focusedErrorBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(13),
+        borderSide: const BorderSide(color: Colors.redAccent, width: 1.5),
       ),
     );
   }
 
-  void _showMessage(
-    String message,
-  ) {
+  void _showMessage(String message) {
     if (!mounted) {
       return;
     }
 
-    ScaffoldMessenger.of(context)
-        .showSnackBar(
-      SnackBar(
-        content:
-            Text(message),
-      ),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   Widget _buildSheetHandle() {
@@ -1776,10 +1253,7 @@ class _ComputerScreenState extends State<ComputerScreen> {
       height: 5,
       decoration: BoxDecoration(
         color: Colors.white24,
-        borderRadius:
-            BorderRadius.circular(
-          10,
-        ),
+        borderRadius: BorderRadius.circular(10),
       ),
     );
   }
@@ -1792,17 +1266,12 @@ class _ComputerScreenState extends State<ComputerScreen> {
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
-      backgroundColor:
-          const Color(0xff17120f),
+      backgroundColor: const Color(0xff17120f),
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(
-          top: Radius.circular(24),
-        ),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
       builder: (sheetContext) {
-        void openAfterClose(
-          VoidCallback action,
-        ) {
+        void openAfterClose(VoidCallback action) {
           Navigator.pop(sheetContext);
           Future<void>.microtask(action);
         }
@@ -1810,81 +1279,49 @@ class _ComputerScreenState extends State<ComputerScreen> {
         return SafeArea(
           top: false,
           child: SingleChildScrollView(
-            padding:
-                const EdgeInsets.fromLTRB(
-              18,
-              16,
-              18,
-              28,
-            ),
+            padding: const EdgeInsets.fromLTRB(18, 16, 18, 28),
             child: Column(
-              mainAxisSize:
-                  MainAxisSize.min,
+              mainAxisSize: MainAxisSize.min,
               children: [
                 _buildSheetHandle(),
 
-                const SizedBox(
-                  height: 14,
-                ),
+                const SizedBox(height: 14),
 
                 const _SheetTitle(
-                  icon:
-                      Icons.settings_suggest,
-                  title:
-                      'CENTRE DE CONFIGURATION',
+                  icon: Icons.settings_suggest,
+                  title: 'CENTRE DE CONFIGURATION',
                 ),
 
-                const SizedBox(
-                  height: 14,
-                ),
+                const SizedBox(height: 14),
 
                 _SettingsHubTile(
-                  icon:
-                      Icons.settings,
-                  title:
-                      'PARAMÈTRES',
-                  subtitle:
-                      'Musique, sons, vibrations et notifications',
+                  icon: Icons.settings,
+                  title: 'PARAMÈTRES',
+                  subtitle: 'Musique, sons, vibrations et notifications',
                   onTap: () {
-                    openAfterClose(
-                      _openSettings,
-                    );
+                    openAfterClose(_openSettings);
                   },
                 ),
 
-                const SizedBox(
-                  height: 10,
-                ),
+                const SizedBox(height: 10),
 
                 _SettingsHubTile(
-                  icon:
-                      Icons.tune,
-                  title:
-                      'OPTIONS',
-                  subtitle:
-                      'Animations, confirmations et conseils de Bjorn',
+                  icon: Icons.tune,
+                  title: 'OPTIONS',
+                  subtitle: 'Animations, confirmations et conseils de Bjorn',
                   onTap: () {
-                    openAfterClose(
-                      _openOptions,
-                    );
+                    openAfterClose(_openOptions);
                   },
                 ),
 
-                const SizedBox(
-                  height: 10,
-                ),
+                const SizedBox(height: 10),
 
                 _SettingsHubTile(
-                  icon:
-                      Icons.manage_accounts,
-                  title:
-                      'COMPTE & SÉCURITÉ',
-                  subtitle:
-                      'E-mail, mot de passe, biométrie et déconnexion',
+                  icon: Icons.manage_accounts,
+                  title: 'COMPTE & SÉCURITÉ',
+                  subtitle: 'E-mail, mot de passe, biométrie et déconnexion',
                   onTap: () {
-                    openAfterClose(
-                      _openAccount,
-                    );
+                    openAfterClose(_openAccount);
                   },
                 ),
               ],
@@ -1895,9 +1332,7 @@ class _ComputerScreenState extends State<ComputerScreen> {
     );
   }
 
-  void _showPortalComingSoon(
-    String feature,
-  ) {
+  void _showPortalComingSoon(String feature) {
     _showMessage(
       '$feature sera branché au portail quand cette partie de Project XP sera développée.',
     );
@@ -1908,74 +1343,38 @@ class _ComputerScreenState extends State<ComputerScreen> {
   // ==========================================================================
 
   @override
-  Widget build(
-    BuildContext context,
-  ) {
+  Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor:
-          const Color(0xff0d0b0a),
+      backgroundColor: const Color(0xff0d0b0a),
       appBar: AppBar(
-        backgroundColor:
-            const Color(0xff21150e),
-        foregroundColor:
-            const Color(0xffffc857),
+        backgroundColor: const Color(0xff21150e),
+        foregroundColor: const Color(0xffffc857),
         automaticallyImplyLeading: false,
         leadingWidth: 58,
-        leading: const Center(
-          child: HallHomeButton(
-            width: 44,
-            height: 40,
-          ),
-        ),
+        leading: const Center(child: HallHomeButton(width: 44, height: 40)),
         centerTitle: true,
         title: const Text(
           'TERMINAL XP',
-          style: TextStyle(
-            fontWeight:
-                FontWeight.bold,
-            letterSpacing: 1.5,
-          ),
+          style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1.5),
         ),
       ),
       body: _loading
           ? const Center(
-              child:
-                  CircularProgressIndicator(
-                color:
-                    Color(0xffffc857),
-              ),
+              child: CircularProgressIndicator(color: Color(0xffffc857)),
             )
           : SafeArea(
-              child:
-                  SingleChildScrollView(
-                padding:
-                    const EdgeInsets.fromLTRB(
-                  12,
-                  12,
-                  12,
-                  24,
-                ),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 12, 12, 14),
                 child: _PortalBrowser(
-                  username:
-                      _username,
-                  avatar:
-                      _avatar,
-                  games:
-                      _games,
-                  activity:
-                      _activity,
-                  onProfile:
-                      _openProfile,
-                  onSettings:
-                      _openControlCenter,
-                  onReload:
-                      _loadData,
-                  onLibrary:
-                      _openLibrary,
+                  username: _username,
+                  avatar: _avatar,
+                  games: _games,
+                  activity: _activity,
+                  onSettings: _openControlCenter,
+                  onReload: _loadData,
+                  onGamingDataChanged: _reloadGamingData,
                   onQuestTap: () {
-                    _showPortalComingSoon(
-                      'Les quêtes',
-                    );
+                    _showPortalComingSoon('Les quêtes');
                   },
                 ),
               ),
@@ -1988,15 +1387,29 @@ class _ComputerScreenState extends State<ComputerScreen> {
 // NAVIGATEUR PROJECT XP
 // =============================================================================
 
-class _PortalBrowser extends StatelessWidget {
+enum _PortalRouteKind { home, profile, library, game }
+
+class _PortalLocation {
+  final _PortalRouteKind kind;
+  final String? gameId;
+
+  const _PortalLocation._(this.kind, [this.gameId]);
+
+  const _PortalLocation.home() : this._(_PortalRouteKind.home);
+  const _PortalLocation.profile() : this._(_PortalRouteKind.profile);
+  const _PortalLocation.library() : this._(_PortalRouteKind.library);
+  const _PortalLocation.game(String gameId)
+    : this._(_PortalRouteKind.game, gameId);
+}
+
+class _PortalBrowser extends StatefulWidget {
   final String username;
   final AvatarModel? avatar;
   final List<GameLibraryEntry> games;
   final List<GamingActivityEvent> activity;
-  final VoidCallback onProfile;
   final VoidCallback onSettings;
-  final VoidCallback onReload;
-  final VoidCallback onLibrary;
+  final Future<void> Function() onReload;
+  final Future<void> Function() onGamingDataChanged;
   final VoidCallback onQuestTap;
 
   const _PortalBrowser({
@@ -2004,59 +1417,261 @@ class _PortalBrowser extends StatelessWidget {
     required this.avatar,
     required this.games,
     required this.activity,
-    required this.onProfile,
     required this.onSettings,
     required this.onReload,
-    required this.onLibrary,
+    required this.onGamingDataChanged,
     required this.onQuestTap,
   });
 
   @override
+  State<_PortalBrowser> createState() => _PortalBrowserState();
+}
+
+class _PortalBrowserState extends State<_PortalBrowser> {
+  final List<_PortalLocation> _history = <_PortalLocation>[
+    const _PortalLocation.home(),
+  ];
+  int _historyIndex = 0;
+
+  _PortalLocation get _location => _history[_historyIndex];
+  bool get _canGoBack => _historyIndex > 0;
+  bool get _canGoForward => _historyIndex + 1 < _history.length;
+
+  void _navigate(_PortalLocation location) {
+    setState(() {
+      if (_historyIndex + 1 < _history.length) {
+        _history.removeRange(_historyIndex + 1, _history.length);
+      }
+      _history.add(location);
+      _historyIndex = _history.length - 1;
+    });
+  }
+
+  void _replace(_PortalLocation location) {
+    setState(() {
+      _history[_historyIndex] = location;
+    });
+  }
+
+  void _goBack() {
+    if (!_canGoBack) {
+      return;
+    }
+    setState(() => _historyIndex -= 1);
+  }
+
+  void _goForward() {
+    if (!_canGoForward) {
+      return;
+    }
+    setState(() => _historyIndex += 1);
+  }
+
+  GameLibraryEntry? _gameById(String? id) {
+    if (id == null) {
+      return null;
+    }
+    for (final GameLibraryEntry game in widget.games) {
+      if (game.id == id) {
+        return game;
+      }
+    }
+    return null;
+  }
+
+  String _slug(String raw) {
+    String value = raw.toLowerCase().trim();
+    const Map<String, String> replacements = <String, String>{
+      'à': 'a',
+      'â': 'a',
+      'ä': 'a',
+      'á': 'a',
+      'ã': 'a',
+      'ç': 'c',
+      'é': 'e',
+      'è': 'e',
+      'ê': 'e',
+      'ë': 'e',
+      'î': 'i',
+      'ï': 'i',
+      'í': 'i',
+      'ô': 'o',
+      'ö': 'o',
+      'ó': 'o',
+      'ù': 'u',
+      'û': 'u',
+      'ü': 'u',
+      'ú': 'u',
+      'ÿ': 'y',
+      'œ': 'oe',
+    };
+    replacements.forEach((String from, String to) {
+      value = value.replaceAll(from, to);
+    });
+    value = value.replaceAll(RegExp(r'[^a-z0-9]+'), '-');
+    value = value.replaceAll(RegExp(r'^-+|-+$'), '');
+    return value.isEmpty ? 'jeu' : value;
+  }
+
+  String get _address {
+    switch (_location.kind) {
+      case _PortalRouteKind.home:
+        return 'projectxp.gg';
+      case _PortalRouteKind.profile:
+        return 'projectxp.gg/profil';
+      case _PortalRouteKind.library:
+        return 'projectxp.gg/bibliotheque';
+      case _PortalRouteKind.game:
+        final GameLibraryEntry? game = _gameById(_location.gameId);
+        return 'projectxp.gg/jeu/${_slug(game?.title ?? 'jeu')}';
+    }
+  }
+
+  void _openGame(GameLibraryEntry game) {
+    _navigate(_PortalLocation.game(game.id));
+  }
+
+  void _switchGame(GameLibraryEntry current, int delta) {
+    final int index = widget.games.indexWhere((game) => game.id == current.id);
+    if (index < 0) {
+      return;
+    }
+    final int next = index + delta;
+    if (next < 0 || next >= widget.games.length) {
+      return;
+    }
+    _replace(_PortalLocation.game(widget.games[next].id));
+  }
+
+  Future<void> _setFavorite(GameLibraryEntry game, bool favorite) async {
+    await GameLibraryService.updateGame(game.copyWith(favorite: favorite));
+    await widget.onGamingDataChanged();
+  }
+
+  Future<void> _setStatus(GameLibraryEntry game, GameStatus status) async {
+    await GameLibraryService.updateGame(game.copyWith(status: status));
+    await widget.onGamingDataChanged();
+  }
+
+  Widget _buildPage() {
+    switch (_location.kind) {
+      case _PortalRouteKind.home:
+        return _PortalHomePage(
+          username: widget.username,
+          avatar: widget.avatar,
+          games: widget.games,
+          activity: widget.activity,
+          onProfile: () => _navigate(const _PortalLocation.profile()),
+          onLibrary: () => _navigate(const _PortalLocation.library()),
+          onGame: _openGame,
+          onQuestTap: widget.onQuestTap,
+        );
+      case _PortalRouteKind.profile:
+        return const ProfileScreen(
+          key: ValueKey<String>('projectxp-profile-web'),
+          embedded: true,
+        );
+      case _PortalRouteKind.library:
+        return _PortalLibraryPage(
+          games: widget.games,
+          onOpenGame: _openGame,
+          onDataChanged: widget.onGamingDataChanged,
+        );
+      case _PortalRouteKind.game:
+        final GameLibraryEntry? game = _gameById(_location.gameId);
+        if (game == null) {
+          return _PortalMissingGamePage(
+            onLibrary: () => _replace(const _PortalLocation.library()),
+          );
+        }
+        final int index = widget.games.indexWhere((item) => item.id == game.id);
+        return _PortalGamePage(
+          key: ValueKey<String>('game-${game.id}'),
+          game: game,
+          hasPrevious: index > 0,
+          hasNext: index >= 0 && index + 1 < widget.games.length,
+          onPrevious: () => _switchGame(game, -1),
+          onNext: () => _switchGame(game, 1),
+          onFavoriteChanged: (value) => _setFavorite(game, value),
+          onStatusChanged: (status) => _setStatus(game, status),
+        );
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      clipBehavior: Clip.antiAlias,
-      decoration: BoxDecoration(
-        color: const Color(0xff111315),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(
-          color: const Color(0xff4b3a25),
-          width: 1.2,
+    return PopScope<Object?>(
+      canPop: !_canGoBack,
+      onPopInvokedWithResult: (bool didPop, Object? result) {
+        if (didPop) {
+          return;
+        }
+        if (_canGoBack) {
+          _goBack();
+        }
+      },
+      child: Container(
+        width: double.infinity,
+        clipBehavior: Clip.antiAlias,
+        decoration: BoxDecoration(
+          color: const Color(0xff111315),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: const Color(0xff4b3a25), width: 1.2),
+          boxShadow: const <BoxShadow>[
+            BoxShadow(
+              color: Colors.black54,
+              blurRadius: 20,
+              offset: Offset(0, 10),
+            ),
+          ],
         ),
-        boxShadow: const [
-          BoxShadow(
-            color: Colors.black54,
-            blurRadius: 20,
-            offset: Offset(0, 10),
-          ),
-        ],
-      ),
-      child: Column(
-        children: [
-          _BrowserBar(
-            onSettings: onSettings,
-            onReload: onReload,
-          ),
-          _PortalPage(
-            username: username,
-            avatar: avatar,
-            games: games,
-            activity: activity,
-            onProfile: onProfile,
-            onLibrary: onLibrary,
-            onQuestTap: onQuestTap,
-          ),
-        ],
+        child: Column(
+          children: [
+            _BrowserBar(
+              address: _address,
+              canGoBack: _canGoBack,
+              canGoForward: _canGoForward,
+              onBack: _goBack,
+              onForward: _goForward,
+              onHome: () => _navigate(const _PortalLocation.home()),
+              onSettings: widget.onSettings,
+              onReload: widget.onReload,
+            ),
+            Expanded(
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 180),
+                switchInCurve: Curves.easeOut,
+                switchOutCurve: Curves.easeIn,
+                child: KeyedSubtree(
+                  key: ValueKey<String>(_address),
+                  child: _buildPage(),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 }
 
 class _BrowserBar extends StatelessWidget {
+  final String address;
+  final bool canGoBack;
+  final bool canGoForward;
+  final VoidCallback onBack;
+  final VoidCallback onForward;
+  final VoidCallback onHome;
   final VoidCallback onSettings;
-  final VoidCallback onReload;
+  final Future<void> Function() onReload;
 
   const _BrowserBar({
+    required this.address,
+    required this.canGoBack,
+    required this.canGoForward,
+    required this.onBack,
+    required this.onForward,
+    required this.onHome,
     required this.onSettings,
     required this.onReload,
   });
@@ -2065,70 +1680,67 @@ class _BrowserBar extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       height: 52,
-      padding: const EdgeInsets.symmetric(horizontal: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 6),
       decoration: const BoxDecoration(
         color: Color(0xff202326),
-        border: Border(
-          bottom: BorderSide(color: Colors.white10),
-        ),
+        border: Border(bottom: BorderSide(color: Colors.white10)),
       ),
       child: Row(
         children: [
-          const _BrowserIcon(
+          _BrowserIcon(
             icon: Icons.arrow_back_ios_new,
-            enabled: false,
-          ),
-          const _BrowserIcon(
-            icon: Icons.arrow_forward_ios,
-            enabled: false,
+            enabled: canGoBack,
+            onTap: onBack,
           ),
           _BrowserIcon(
-            icon: Icons.refresh,
-            onTap: onReload,
+            icon: Icons.arrow_forward_ios,
+            enabled: canGoForward,
+            onTap: onForward,
           ),
-          const SizedBox(width: 5),
+          _BrowserIcon(icon: Icons.refresh, onTap: () => onReload()),
+          const SizedBox(width: 4),
           Expanded(
-            child: Container(
-              height: 34,
-              padding: const EdgeInsets.symmetric(horizontal: 10),
-              decoration: BoxDecoration(
-                color: const Color(0xff151719),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: Colors.white10),
-              ),
-              child: const Row(
-                children: [
-                  Icon(
-                    Icons.lock,
-                    color: Color(0xff7fd18b),
-                    size: 14,
-                  ),
-                  SizedBox(width: 7),
-                  Expanded(
-                    child: Text(
-                      'portal.projectxp.gg',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: Colors.white70,
-                        fontSize: 11.5,
-                        fontWeight: FontWeight.w600,
+            child: InkWell(
+              onTap: onHome,
+              borderRadius: BorderRadius.circular(10),
+              child: Container(
+                height: 34,
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                decoration: BoxDecoration(
+                  color: const Color(0xff151719),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: Colors.white10),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.lock, color: Color(0xff7fd18b), size: 14),
+                    const SizedBox(width: 7),
+                    Expanded(
+                      child: Text(
+                        address,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white70,
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),
-          const SizedBox(width: 4),
+          const SizedBox(width: 3),
           IconButton(
-            tooltip: 'Paramètres Project XP',
+            tooltip: 'Paramètres du Terminal',
             onPressed: onSettings,
             visualDensity: VisualDensity.compact,
             icon: const Icon(
               Icons.settings,
               color: Color(0xffffc857),
-              size: 22,
+              size: 21,
             ),
           ),
         ],
@@ -2142,18 +1754,12 @@ class _BrowserIcon extends StatelessWidget {
   final bool enabled;
   final VoidCallback? onTap;
 
-  const _BrowserIcon({
-    required this.icon,
-    this.enabled = true,
-    this.onTap,
-  });
+  const _BrowserIcon({required this.icon, this.enabled = true, this.onTap});
 
   @override
   Widget build(BuildContext context) {
-    final Color color = enabled ? Colors.white60 : Colors.white24;
-
     return SizedBox(
-      width: 32,
+      width: 31,
       height: 38,
       child: IconButton(
         padding: EdgeInsets.zero,
@@ -2161,7 +1767,7 @@ class _BrowserIcon extends StatelessWidget {
         onPressed: enabled ? onTap : null,
         icon: Icon(
           icon,
-          color: color,
+          color: enabled ? Colors.white60 : Colors.white24,
           size: 17,
         ),
       ),
@@ -2169,22 +1775,24 @@ class _BrowserIcon extends StatelessWidget {
   }
 }
 
-class _PortalPage extends StatelessWidget {
+class _PortalHomePage extends StatelessWidget {
   final String username;
   final AvatarModel? avatar;
   final List<GameLibraryEntry> games;
   final List<GamingActivityEvent> activity;
   final VoidCallback onProfile;
   final VoidCallback onLibrary;
+  final ValueChanged<GameLibraryEntry> onGame;
   final VoidCallback onQuestTap;
 
-  const _PortalPage({
+  const _PortalHomePage({
     required this.username,
     required this.avatar,
     required this.games,
     required this.activity,
     required this.onProfile,
     required this.onLibrary,
+    required this.onGame,
     required this.onQuestTap,
   });
 
@@ -2198,20 +1806,19 @@ class _PortalPage extends StatelessWidget {
       }
     }
 
+    final GameLibraryEntry? selectedGame = currentGame;
+    final int? completion = selectedGame?.bestCompletionPercent;
+
     return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(16, 22, 16, 22),
       decoration: const BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: [
-            Color(0xff171312),
-            Color(0xff101214),
-          ],
+          colors: <Color>[Color(0xff1b120d), Color(0xff120c08)],
         ),
       ),
-      child: Column(
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 22, 16, 24),
         children: [
           const Text(
             'PORTAIL DES AVENTURIERS',
@@ -2238,11 +1845,15 @@ class _PortalPage extends StatelessWidget {
                   child: _PortalInfoCard(
                     icon: Icons.sports_esports,
                     title: 'EN COURS',
-                    value: currentGame?.title ?? 'Aucun jeu en cours',
-                    subtitle: currentGame == null
+                    value: selectedGame?.title ?? 'Aucun jeu en cours',
+                    subtitle: selectedGame == null
                         ? 'Choisis une aventure dans ta Bibliothèque'
-                        : '${currentGame.platform.label} • ${currentGame.progressPercent} %',
-                    onTap: onLibrary,
+                        : completion == null
+                        ? '${selectedGame.platform.label} • Progression non synchronisée'
+                        : '${selectedGame.platform.label} • $completion %',
+                    onTap: selectedGame == null
+                        ? onLibrary
+                        : () => onGame(selectedGame),
                   ),
                 ),
               ),
@@ -2262,10 +1873,7 @@ class _PortalPage extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 12),
-          _PortalLibraryCard(
-            games: games,
-            onTap: onLibrary,
-          ),
+          _PortalLibraryPreview(games: games, onTap: onLibrary, onGame: onGame),
           const SizedBox(height: 18),
           _PortalAdventureFeed(activity: activity),
         ],
@@ -2288,7 +1896,6 @@ class _PortalIdentityCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final AvatarModel? currentAvatar = avatar;
-
     return Material(
       color: const Color(0xff1d1f22),
       borderRadius: BorderRadius.circular(14),
@@ -2306,22 +1913,16 @@ class _PortalIdentityCard extends StatelessWidget {
           ),
           child: Row(
             children: [
-              Container(
+              SizedBox(
                 width: 54,
                 height: 54,
-                clipBehavior: Clip.antiAlias,
-                decoration: BoxDecoration(
-                  color: const Color(0xff141618),
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color: const Color(0xffffc857),
-                    width: 1.5,
-                  ),
-                ),
                 child: currentAvatar == null
-                    ? const Icon(
-                        Icons.person,
-                        color: Color(0xffffc857),
+                    ? const DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: Color(0xff141618),
+                          shape: BoxShape.circle,
+                        ),
+                        child: Icon(Icons.person, color: Color(0xffffc857)),
                       )
                     : ClipOval(
                         child: FittedBox(
@@ -2371,10 +1972,7 @@ class _PortalIdentityCard extends StatelessWidget {
                   ],
                 ),
               ),
-              const Icon(
-                Icons.chevron_right,
-                color: Color(0xffffc857),
-              ),
+              const Icon(Icons.chevron_right, color: Color(0xffffc857)),
             ],
           ),
         ),
@@ -2417,11 +2015,7 @@ class _PortalInfoCard extends StatelessWidget {
             children: [
               Row(
                 children: [
-                  Icon(
-                    icon,
-                    color: const Color(0xffffc857),
-                    size: 19,
-                  ),
+                  Icon(icon, color: const Color(0xffffc857), size: 19),
                   const SizedBox(width: 7),
                   Expanded(
                     child: Text(
@@ -2469,21 +2063,25 @@ class _PortalInfoCard extends StatelessWidget {
   }
 }
 
-class _PortalLibraryCard extends StatelessWidget {
+class _PortalLibraryPreview extends StatelessWidget {
   final List<GameLibraryEntry> games;
   final VoidCallback onTap;
+  final ValueChanged<GameLibraryEntry> onGame;
 
-  const _PortalLibraryCard({
+  const _PortalLibraryPreview({
     required this.games,
     required this.onTap,
+    required this.onGame,
   });
 
   @override
   Widget build(BuildContext context) {
-    final int inProgress =
-        games.where((game) => game.status == GameStatus.inProgress).length;
-    final int completed =
-        games.where((game) => game.status == GameStatus.completed).length;
+    final int inProgress = games
+        .where((game) => game.status == GameStatus.inProgress)
+        .length;
+    final int completed = games
+        .where((game) => game.status == GameStatus.completed)
+        .length;
     final List<GameLibraryEntry> preview = games.take(4).toList();
 
     return Material(
@@ -2502,15 +2100,15 @@ class _PortalLibraryCard extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
+              const Row(
                 children: [
-                  const Icon(
+                  Icon(
                     Icons.menu_book_rounded,
                     color: Color(0xffffc857),
                     size: 20,
                   ),
-                  const SizedBox(width: 8),
-                  const Expanded(
+                  SizedBox(width: 8),
+                  Expanded(
                     child: Text(
                       'MA BIBLIOTHÈQUE',
                       style: TextStyle(
@@ -2521,10 +2119,7 @@ class _PortalLibraryCard extends StatelessWidget {
                       ),
                     ),
                   ),
-                  const Icon(
-                    Icons.chevron_right,
-                    color: Colors.white38,
-                  ),
+                  Icon(Icons.chevron_right, color: Colors.white38),
                 ],
               ),
               const SizedBox(height: 7),
@@ -2532,10 +2127,7 @@ class _PortalLibraryCard extends StatelessWidget {
                 games.isEmpty
                     ? 'Aucun jeu ajouté pour le moment.'
                     : '${games.length} jeux • $inProgress en cours • $completed terminés',
-                style: const TextStyle(
-                  color: Colors.white54,
-                  fontSize: 11.5,
-                ),
+                style: const TextStyle(color: Colors.white54, fontSize: 11.5),
               ),
               if (preview.isNotEmpty) ...[
                 const SizedBox(height: 12),
@@ -2544,7 +2136,10 @@ class _PortalLibraryCard extends StatelessWidget {
                     for (int i = 0; i < preview.length; i++) ...[
                       if (i > 0) const SizedBox(width: 7),
                       Expanded(
-                        child: _PortalGameMini(game: preview[i]),
+                        child: GestureDetector(
+                          onTap: () => onGame(preview[i]),
+                          child: _PortalGameMini(game: preview[i]),
+                        ),
                       ),
                     ],
                   ],
@@ -2558,6 +2153,1162 @@ class _PortalLibraryCard extends StatelessWidget {
   }
 }
 
+enum _PortalLibrarySort {
+  recent,
+  titleAZ,
+  titleZA,
+  progressHigh,
+  progressLow,
+  playtimeHigh,
+  playtimeLow,
+}
+
+extension _PortalLibrarySortX on _PortalLibrarySort {
+  String get label {
+    switch (this) {
+      case _PortalLibrarySort.recent:
+        return 'Activité récente';
+      case _PortalLibrarySort.titleAZ:
+        return 'Nom A → Z';
+      case _PortalLibrarySort.titleZA:
+        return 'Nom Z → A';
+      case _PortalLibrarySort.progressHigh:
+        return 'Progression ↓';
+      case _PortalLibrarySort.progressLow:
+        return 'Progression ↑';
+      case _PortalLibrarySort.playtimeHigh:
+        return 'Temps de jeu ↓';
+      case _PortalLibrarySort.playtimeLow:
+        return 'Temps de jeu ↑';
+    }
+  }
+}
+
+class _PortalLibraryPage extends StatefulWidget {
+  final List<GameLibraryEntry> games;
+  final ValueChanged<GameLibraryEntry> onOpenGame;
+  final Future<void> Function() onDataChanged;
+
+  const _PortalLibraryPage({
+    required this.games,
+    required this.onOpenGame,
+    required this.onDataChanged,
+  });
+
+  @override
+  State<_PortalLibraryPage> createState() => _PortalLibraryPageState();
+}
+
+class _PortalLibraryPageState extends State<_PortalLibraryPage> {
+  String _query = '';
+  GameStatus? _status;
+  bool _favoriteOnly = false;
+  _PortalLibrarySort _sort = _PortalLibrarySort.recent;
+
+  bool _steamBusy = false;
+  String? _steamProgressLabel;
+
+  @override
+  void initState() {
+    super.initState();
+    SteamSyncService.syncState.addListener(_handleSteamSyncState);
+    _handleSteamSyncState();
+  }
+
+  @override
+  void dispose() {
+    SteamSyncService.syncState.removeListener(_handleSteamSyncState);
+    super.dispose();
+  }
+
+  void _handleSteamSyncState() {
+    if (!mounted) {
+      return;
+    }
+
+    final SteamSyncUiState state = SteamSyncService.syncState.value;
+    setState(() {
+      _steamBusy = state.running;
+      _steamProgressLabel = state.running ? state.label : null;
+    });
+  }
+
+  Future<void> _syncAllSteam() async {
+    FocusManager.instance.primaryFocus?.unfocus();
+
+    final bool hasIdentity = await SteamSyncService.hasSyncIdentity();
+
+    if (!mounted) {
+      return;
+    }
+
+    if (!hasIdentity) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Lie d’abord Steam depuis COMPTES avant de synchroniser.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    try {
+      await SteamSyncService.syncEverything(force: true);
+
+      if (mounted) {
+        await widget.onDataChanged();
+      }
+    } on SteamSyncException catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.message)));
+    }
+  }
+
+  List<GameLibraryEntry> get _filtered {
+    final String query = _query.trim().toLowerCase();
+
+    Iterable<GameLibraryEntry> filtered = widget.games;
+
+    if (_favoriteOnly) {
+      filtered = filtered.where((game) => game.favorite);
+    } else if (_status != null) {
+      filtered = filtered.where((game) => game.status == _status);
+    }
+
+    if (query.isNotEmpty) {
+      filtered = filtered.where(
+        (game) =>
+            game.title.toLowerCase().contains(query) ||
+            game.platformSummaryText.toLowerCase().contains(query),
+      );
+    }
+
+    final List<GameLibraryEntry> result = filtered.toList();
+
+    switch (_sort) {
+      case _PortalLibrarySort.recent:
+        result.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+        break;
+      case _PortalLibrarySort.titleAZ:
+        result.sort(
+          (a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()),
+        );
+        break;
+      case _PortalLibrarySort.titleZA:
+        result.sort(
+          (a, b) => b.title.toLowerCase().compareTo(a.title.toLowerCase()),
+        );
+        break;
+      case _PortalLibrarySort.progressHigh:
+        result.sort(
+          (a, b) => (b.bestCompletionPercent ?? -1).compareTo(
+            a.bestCompletionPercent ?? -1,
+          ),
+        );
+        break;
+      case _PortalLibrarySort.progressLow:
+        result.sort(
+          (a, b) => (a.bestCompletionPercent ?? 101).compareTo(
+            b.bestCompletionPercent ?? 101,
+          ),
+        );
+        break;
+      case _PortalLibrarySort.playtimeHigh:
+        result.sort(
+          (a, b) => b.totalPlaytimeMinutes.compareTo(a.totalPlaytimeMinutes),
+        );
+        break;
+      case _PortalLibrarySort.playtimeLow:
+        result.sort(
+          (a, b) => a.totalPlaytimeMinutes.compareTo(b.totalPlaytimeMinutes),
+        );
+        break;
+    }
+
+    return result;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final List<GameLibraryEntry> games = _filtered;
+
+    final int inProgress = widget.games
+        .where((game) => game.status == GameStatus.inProgress)
+        .length;
+    final int completed = widget.games
+        .where((game) => game.status == GameStatus.completed)
+        .length;
+    final int backlog = widget.games
+        .where((game) => game.status == GameStatus.backlog)
+        .length;
+
+    return Container(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: <Color>[Color(0xff1b120d), Color(0xff120c08)],
+        ),
+      ),
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 18, 16, 26),
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'BIBLIOTHÈQUE',
+                      style: TextStyle(
+                        color: Color(0xffffc857),
+                        fontSize: 22,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: 1.2,
+                      ),
+                    ),
+                    const SizedBox(height: 5),
+                    Text(
+                      '${widget.games.length} jeux • '
+                      '$inProgress en cours • '
+                      '$backlog pas commencés • '
+                      '$completed terminés',
+                      style: const TextStyle(
+                        color: Colors.white54,
+                        fontSize: 11.5,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 10),
+              FilledButton.icon(
+                onPressed: _steamBusy ? null : _syncAllSteam,
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xffffc857),
+                  foregroundColor: const Color(0xff21150e),
+                  disabledBackgroundColor: const Color(0xff4a4238),
+                  disabledForegroundColor: Colors.white54,
+                  visualDensity: VisualDensity.compact,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 11,
+                    vertical: 10,
+                  ),
+                ),
+                icon: _steamBusy
+                    ? const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white70,
+                        ),
+                      )
+                    : const Icon(Icons.sync_rounded, size: 17),
+                label: Text(
+                  _steamBusy ? 'SYNC...' : 'SYNCHRO',
+                  style: const TextStyle(
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (_steamProgressLabel != null) ...[
+            const SizedBox(height: 9),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
+              decoration: BoxDecoration(
+                color: const Color(0xff1d1f22),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.white10),
+              ),
+              child: Row(
+                children: [
+                  const SizedBox(
+                    width: 13,
+                    height: 13,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Color(0xffffc857),
+                    ),
+                  ),
+                  const SizedBox(width: 9),
+                  Expanded(
+                    child: Text(
+                      _steamProgressLabel!,
+                      style: const TextStyle(
+                        color: Colors.white60,
+                        fontSize: 10.5,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+          const SizedBox(height: 14),
+          TextField(
+            onChanged: (value) => setState(() => _query = value),
+            style: const TextStyle(color: Colors.white),
+            decoration: InputDecoration(
+              hintText: 'Rechercher un jeu...',
+              hintStyle: const TextStyle(color: Colors.white38),
+              prefixIcon: const Icon(Icons.search, color: Color(0xffffc857)),
+              filled: true,
+              fillColor: const Color(0xff1d1f22),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(13),
+                borderSide: BorderSide.none,
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(13),
+                borderSide: const BorderSide(color: Colors.white10),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(13),
+                borderSide: const BorderSide(color: Color(0xffffc857)),
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                _LibraryFilterChip(
+                  label: 'Tous',
+                  selected: _status == null && !_favoriteOnly,
+                  onTap: () {
+                    setState(() {
+                      _status = null;
+                      _favoriteOnly = false;
+                    });
+                  },
+                ),
+                const SizedBox(width: 7),
+                _LibraryFilterChip(
+                  label: 'Favoris',
+                  selected: _favoriteOnly,
+                  onTap: () {
+                    setState(() {
+                      _status = null;
+                      _favoriteOnly = true;
+                    });
+                  },
+                ),
+                const SizedBox(width: 7),
+                for (final GameStatus status in const <GameStatus>[
+                  GameStatus.backlog,
+                  GameStatus.inProgress,
+                  GameStatus.completed,
+                  GameStatus.abandoned,
+                ]) ...[
+                  _LibraryFilterChip(
+                    label: status.label,
+                    selected: !_favoriteOnly && _status == status,
+                    onTap: () {
+                      setState(() {
+                        _favoriteOnly = false;
+                        _status = status;
+                      });
+                    },
+                  ),
+                  const SizedBox(width: 7),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
+          Container(
+            height: 48,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            decoration: BoxDecoration(
+              color: const Color(0xff1d1f22),
+              borderRadius: BorderRadius.circular(13),
+              border: Border.all(color: Colors.white10),
+            ),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.sort_rounded,
+                  color: Color(0xffffc857),
+                  size: 19,
+                ),
+                const SizedBox(width: 9),
+                const Text(
+                  'TRIER',
+                  style: TextStyle(
+                    color: Colors.white54,
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 0.7,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: DropdownButtonHideUnderline(
+                    child: DropdownButton<_PortalLibrarySort>(
+                      value: _sort,
+                      isExpanded: true,
+                      dropdownColor: const Color(0xff202326),
+                      iconEnabledColor: const Color(0xffffc857),
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w700,
+                      ),
+                      items: _PortalLibrarySort.values
+                          .map(
+                            (sort) => DropdownMenuItem<_PortalLibrarySort>(
+                              value: sort,
+                              child: Text(sort.label),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (value) {
+                        if (value == null) {
+                          return;
+                        }
+                        setState(() => _sort = value);
+                      },
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+          Text(
+            '${games.length} résultat${games.length > 1 ? 's' : ''}',
+            style: const TextStyle(color: Colors.white38, fontSize: 10.5),
+          ),
+          const SizedBox(height: 8),
+          if (games.isEmpty)
+            const _WebEmptyCard(
+              icon: Icons.search_off,
+              title: 'Aucun jeu trouvé',
+              detail: 'Modifie ta recherche, ton filtre ou ton tri.',
+            )
+          else
+            for (int i = 0; i < games.length; i++) ...[
+              _LibraryGameRow(
+                game: games[i],
+                onTap: () => widget.onOpenGame(games[i]),
+              ),
+              if (i + 1 < games.length) const SizedBox(height: 9),
+            ],
+        ],
+      ),
+    );
+  }
+}
+
+class _LibraryFilterChip extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _LibraryFilterChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ChoiceChip(
+      label: Text(label),
+      selected: selected,
+      onSelected: (_) => onTap(),
+      selectedColor: const Color(0xffffc857),
+      backgroundColor: const Color(0xff1d1f22),
+      side: BorderSide(
+        color: selected ? const Color(0xffffc857) : Colors.white12,
+      ),
+      labelStyle: TextStyle(
+        color: selected ? const Color(0xff2b1a12) : Colors.white70,
+        fontSize: 10.5,
+        fontWeight: FontWeight.w800,
+      ),
+      showCheckmark: false,
+    );
+  }
+}
+
+class _LibraryGameRow extends StatelessWidget {
+  final GameLibraryEntry game;
+  final VoidCallback onTap;
+
+  const _LibraryGameRow({required this.game, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final int? completion = game.bestCompletionPercent;
+    return Material(
+      color: const Color(0xff1a1c1f),
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
+        child: Container(
+          padding: const EdgeInsets.all(11),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: Colors.white10),
+          ),
+          child: Row(
+            children: [
+              _GameCover(game: game, width: 54, height: 74),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      game.title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 5),
+                    Text.rich(
+                      TextSpan(
+                        children: <InlineSpan>[
+                          TextSpan(
+                            text: '${game.platformSummaryText} • ',
+                            style: const TextStyle(
+                              color: Colors.white54,
+                              fontSize: 10.5,
+                            ),
+                          ),
+                          TextSpan(
+                            text: game.status.label,
+                            style: TextStyle(
+                              color: game.status == GameStatus.completed
+                                  ? const Color(0xff64f58d)
+                                  : Colors.white54,
+                              fontSize: 10.5,
+                              fontWeight: game.status == GameStatus.completed
+                                  ? FontWeight.w900
+                                  : FontWeight.w400,
+                            ),
+                          ),
+                        ],
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 5),
+                    Text(
+                      completion == null
+                          ? (game.allAchievementCatalogsKnownEmpty
+                                ? 'Aucun succès / trophée pour ce jeu'
+                                : 'Progression non synchronisée')
+                          : 'Progression • $completion %',
+                      style: const TextStyle(
+                        color: Color(0xffffc857),
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (game.favorite)
+                const Padding(
+                  padding: EdgeInsets.only(right: 5),
+                  child: Icon(Icons.star, color: Color(0xffffc857), size: 18),
+                ),
+              const Icon(Icons.chevron_right, color: Colors.white38),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PortalGamePage extends StatelessWidget {
+  final GameLibraryEntry game;
+  final bool hasPrevious;
+  final bool hasNext;
+  final VoidCallback onPrevious;
+  final VoidCallback onNext;
+  final ValueChanged<bool> onFavoriteChanged;
+  final ValueChanged<GameStatus> onStatusChanged;
+
+  const _PortalGamePage({
+    super.key,
+    required this.game,
+    required this.hasPrevious,
+    required this.hasNext,
+    required this.onPrevious,
+    required this.onNext,
+    required this.onFavoriteChanged,
+    required this.onStatusChanged,
+  });
+
+  String _playtimeLabel(int minutes) {
+    final double hours = minutes / 60;
+    if (hours >= 100) {
+      return '${hours.round()} h';
+    }
+    return '${hours.toStringAsFixed(1)} h';
+  }
+
+  DateTime? _lastPlayedAt() {
+    DateTime? latest;
+    for (final GamePlatformProfile profile in game.resolvedPlatformProfiles) {
+      final DateTime? value = profile.lastPlayedAt;
+      if (value != null && (latest == null || value.isAfter(latest))) {
+        latest = value;
+      }
+    }
+    return latest;
+  }
+
+  String _dateLabel(DateTime? value) {
+    if (value == null) {
+      return 'Non disponible';
+    }
+    final String day = value.day.toString().padLeft(2, '0');
+    final String month = value.month.toString().padLeft(2, '0');
+    return '$day/$month/${value.year}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final int? completion = game.bestCompletionPercent;
+    final GamePlatformProfile? profile = game.bestCompletionProfile;
+    final GameAchievementSummary achievements =
+        profile?.computedAchievementSummary ?? game.computedAchievementSummary;
+    final List<GameAchievementDetail> details =
+        profile?.achievementDetails ?? game.achievementDetails;
+    final double achievementListHeight = (details.length * 72.0)
+        .clamp(72.0, 520.0)
+        .toDouble();
+
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onHorizontalDragEnd: (details) {
+        final double velocity = details.primaryVelocity ?? 0;
+        if (velocity < -260 && hasNext) {
+          onNext();
+        } else if (velocity > 260 && hasPrevious) {
+          onPrevious();
+        }
+      },
+      child: Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: <Color>[Color(0xff1b120d), Color(0xff120c08)],
+          ),
+        ),
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 18, 16, 28),
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    game.title.toUpperCase(),
+                    style: const TextStyle(
+                      color: Color(0xffffc857),
+                      fontSize: 21,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 1.0,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  tooltip: game.favorite
+                      ? 'Retirer des favoris'
+                      : 'Ajouter aux favoris',
+                  onPressed: () => onFavoriteChanged(!game.favorite),
+                  icon: Icon(
+                    game.favorite ? Icons.star : Icons.star_border,
+                    color: const Color(0xffffc857),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: <Color>[
+                    Color(0xff1d1f22),
+                    Color(0xff17191c),
+                    Color(0xff111315),
+                  ],
+                ),
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(
+                  color: const Color(0xffffc857).withValues(alpha: 0.34),
+                ),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _GameCover(game: game, width: 104, height: 146),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          game.title,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 18,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                        const SizedBox(height: 7),
+                        Text(
+                          game.platformSummaryText,
+                          style: const TextStyle(
+                            color: Colors.white54,
+                            fontSize: 11,
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        Text(
+                          completion == null ? '—' : '$completion %',
+                          style: const TextStyle(
+                            color: Color(0xffffc857),
+                            fontSize: 27,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                        const Text(
+                          'COMPLÉTION',
+                          style: TextStyle(
+                            color: Colors.white38,
+                            fontSize: 9.5,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 0.9,
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        DropdownButtonHideUnderline(
+                          child: DropdownButton<GameStatus>(
+                            value: game.status == GameStatus.unclassified
+                                ? GameStatus.backlog
+                                : game.status,
+                            isExpanded: true,
+                            dropdownColor: const Color(0xff1d1f22),
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                            ),
+                            items:
+                                const <GameStatus>[
+                                  GameStatus.backlog,
+                                  GameStatus.inProgress,
+                                  GameStatus.completed,
+                                  GameStatus.abandoned,
+                                ].map((status) {
+                                  final bool completed =
+                                      status == GameStatus.completed;
+                                  return DropdownMenuItem<GameStatus>(
+                                    value: status,
+                                    child: Text(
+                                      status.label,
+                                      style: TextStyle(
+                                        color: completed
+                                            ? const Color(0xff64f58d)
+                                            : Colors.white,
+                                        fontWeight: completed
+                                            ? FontWeight.w900
+                                            : FontWeight.w700,
+                                      ),
+                                    ),
+                                  );
+                                }).toList(),
+                            onChanged: (status) {
+                              if (status != null && status != game.status) {
+                                onStatusChanged(status);
+                              }
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: _GameStatCard(
+                    emoji: '⏱️',
+                    value: _playtimeLabel(game.totalPlaytimeMinutes),
+                    label: 'Temps joué',
+                  ),
+                ),
+                const SizedBox(width: 9),
+                Expanded(
+                  child: _GameStatCard(
+                    emoji: '🏆',
+                    value: achievements.total > 0
+                        ? '${achievements.unlocked}/${achievements.total}'
+                        : '—',
+                    label: profile?.platform.achievementLabel ?? 'Succès',
+                  ),
+                ),
+                const SizedBox(width: 9),
+                Expanded(
+                  child: _GameStatCard(
+                    emoji: '🕹️',
+                    value: _dateLabel(_lastPlayedAt()),
+                    label: 'Dernière partie',
+                  ),
+                ),
+              ],
+            ),
+            if ((game.summary ?? '').trim().isNotEmpty) ...[
+              const SizedBox(height: 14),
+              _WebSection(
+                title: 'À PROPOS',
+                child: Text(
+                  game.summary!.trim(),
+                  style: const TextStyle(
+                    color: Colors.white70,
+                    fontSize: 11.5,
+                    height: 1.45,
+                  ),
+                ),
+              ),
+            ],
+            const SizedBox(height: 14),
+            _WebSection(
+              title: 'SUCCÈS',
+              child: achievements.total <= 0
+                  ? Text(
+                      game.allAchievementCatalogsKnownEmpty
+                          ? 'Ce jeu ne possède pas de succès connu sur les plateformes synchronisées.'
+                          : 'Les succès ne sont pas encore synchronisés.',
+                      style: const TextStyle(
+                        color: Colors.white54,
+                        fontSize: 11,
+                      ),
+                    )
+                  : details.isEmpty
+                  ? Text(
+                      'La progression est synchronisée '
+                      '(${achievements.unlocked}/${achievements.total}), '
+                      'mais le détail des succès n’est pas encore disponible. '
+                      'Relance SYNCHRO pour récupérer le catalogue complet.',
+                      style: const TextStyle(
+                        color: Colors.white54,
+                        fontSize: 11,
+                        height: 1.4,
+                      ),
+                    )
+                  : Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                '${details.length} succès / trophées chargés',
+                                style: const TextStyle(
+                                  color: Colors.white54,
+                                  fontSize: 10.5,
+                                ),
+                              ),
+                            ),
+                            Text(
+                              '${achievements.unlocked}/${achievements.total}',
+                              style: const TextStyle(
+                                color: Color(0xffffc857),
+                                fontSize: 10.5,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 10),
+                        SizedBox(
+                          height: achievementListHeight,
+                          child: ListView.separated(
+                            primary: false,
+                            itemCount: details.length,
+                            itemBuilder: (context, index) =>
+                                _AchievementRow(achievement: details[index]),
+                            separatorBuilder: (context, index) => const Divider(
+                              height: 13,
+                              color: Colors.white10,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+            ),
+            const SizedBox(height: 15),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                _GameSwipeHint(
+                  icon: Icons.arrow_back_rounded,
+                  label: 'Jeu précédent',
+                  enabled: hasPrevious,
+                  onTap: onPrevious,
+                ),
+                const Text(
+                  'Swipe ←  →',
+                  style: TextStyle(
+                    color: Colors.white24,
+                    fontSize: 9.5,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                _GameSwipeHint(
+                  icon: Icons.arrow_forward_rounded,
+                  label: 'Jeu suivant',
+                  enabled: hasNext,
+                  onTap: onNext,
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _GameSwipeHint extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final bool enabled;
+  final VoidCallback onTap;
+
+  const _GameSwipeHint({
+    required this.icon,
+    required this.label,
+    required this.enabled,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: enabled ? onTap : null,
+      borderRadius: BorderRadius.circular(10),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 7),
+        child: Row(
+          children: [
+            Icon(
+              icon,
+              size: 15,
+              color: enabled ? const Color(0xffffc857) : Colors.white12,
+            ),
+            const SizedBox(width: 4),
+            Text(
+              label,
+              style: TextStyle(
+                color: enabled ? Colors.white54 : Colors.white12,
+                fontSize: 9.5,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _GameStatCard extends StatelessWidget {
+  final String emoji;
+  final String value;
+  final String label;
+
+  const _GameStatCard({
+    required this.emoji,
+    required this.value,
+    required this.label,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      constraints: const BoxConstraints(minHeight: 84),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xff1a1c1f),
+        borderRadius: BorderRadius.circular(13),
+        border: Border.all(color: Colors.white10),
+      ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Text(emoji, style: const TextStyle(fontSize: 18)),
+          const SizedBox(height: 5),
+          Text(
+            value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 11,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 3),
+          Text(
+            label,
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: Colors.white38, fontSize: 8.8),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _WebSection extends StatelessWidget {
+  final String title;
+  final Widget child;
+
+  const _WebSection({required this.title, required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xff1a1c1f),
+        borderRadius: BorderRadius.circular(15),
+        border: Border.all(color: Colors.white10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: const TextStyle(
+              color: Color(0xffffc857),
+              fontSize: 11,
+              fontWeight: FontWeight.w900,
+              letterSpacing: 0.9,
+            ),
+          ),
+          const SizedBox(height: 10),
+          child,
+        ],
+      ),
+    );
+  }
+}
+
+class _AchievementRow extends StatelessWidget {
+  final GameAchievementDetail achievement;
+
+  const _AchievementRow({required this.achievement});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(
+          achievement.isUnlocked ? Icons.emoji_events : Icons.lock_outline,
+          size: 18,
+          color: achievement.isUnlocked
+              ? const Color(0xffffc857)
+              : Colors.white24,
+        ),
+        const SizedBox(width: 9),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                achievement.name,
+                style: TextStyle(
+                  color: achievement.isUnlocked ? Colors.white : Colors.white54,
+                  fontSize: 10.8,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              if (achievement.description.trim().isNotEmpty)
+                Text(
+                  achievement.description.trim(),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: Colors.white30, fontSize: 9.5),
+                ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _GameCover extends StatelessWidget {
+  final GameLibraryEntry game;
+  final double width;
+  final double height;
+
+  const _GameCover({
+    required this.game,
+    required this.width,
+    required this.height,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final List<String> candidates = game.coverCandidates;
+    final Widget fallback = Container(
+      width: width,
+      height: height,
+      color: const Color(0xff111315),
+      alignment: Alignment.center,
+      child: const Icon(Icons.sports_esports, color: Colors.white24, size: 24),
+    );
+    if (candidates.isEmpty) {
+      return ClipRRect(borderRadius: BorderRadius.circular(8), child: fallback);
+    }
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(8),
+      child: Image.network(
+        candidates.first,
+        width: width,
+        height: height,
+        fit: BoxFit.cover,
+        errorBuilder: (context, error, stackTrace) => fallback,
+      ),
+    );
+  }
+}
+
 class _PortalGameMini extends StatelessWidget {
   final GameLibraryEntry game;
 
@@ -2565,41 +3316,16 @@ class _PortalGameMini extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final Widget fallback = Container(
-      color: const Color(0xff111315),
-      alignment: Alignment.center,
-      child: const Icon(
-        Icons.sports_esports,
-        color: Colors.white24,
-        size: 18,
-      ),
-    );
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        ClipRRect(
-          borderRadius: BorderRadius.circular(6),
-          child: AspectRatio(
-            aspectRatio: 0.72,
-            child: game.coverUrl == null || game.coverUrl!.isEmpty
-                ? fallback
-                : Image.network(
-                    game.coverUrl!,
-                    fit: BoxFit.cover,
-                    errorBuilder: (context, error, stackTrace) => fallback,
-                  ),
-          ),
-        ),
+        _GameCover(game: game, width: double.infinity, height: 92),
         const SizedBox(height: 4),
         Text(
           game.title,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
-            color: Colors.white60,
-            fontSize: 8.5,
-          ),
+          style: const TextStyle(color: Colors.white60, fontSize: 8.5),
         ),
       ],
     );
@@ -2620,7 +3346,6 @@ class _PortalAdventureFeed extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final List<GamingActivityEvent> preview = activity.take(4).toList();
-
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(15, 14, 15, 15),
@@ -2713,11 +3438,7 @@ class _PortalAdventureFeed extends StatelessWidget {
           const SizedBox(height: 2),
           const Text(
             'L’activité de tes amis rejoindra bientôt ce fil.',
-            style: TextStyle(
-              color: Colors.white24,
-              fontSize: 9.5,
-              height: 1.3,
-            ),
+            style: TextStyle(color: Colors.white24, fontSize: 9.5, height: 1.3),
           ),
         ],
       ),
@@ -2725,9 +3446,81 @@ class _PortalAdventureFeed extends StatelessWidget {
   }
 }
 
+class _PortalMissingGamePage extends StatelessWidget {
+  final VoidCallback onLibrary;
 
-class _SettingsHubTile
-    extends StatelessWidget {
+  const _PortalMissingGamePage({required this.onLibrary});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: const Color(0xff1b120d),
+      alignment: Alignment.center,
+      padding: const EdgeInsets.all(24),
+      child: _WebEmptyCard(
+        icon: Icons.videogame_asset_off,
+        title: 'Jeu introuvable',
+        detail: 'La bibliothèque a changé depuis l’ouverture de cette page.',
+        action: onLibrary,
+      ),
+    );
+  }
+}
+
+class _WebEmptyCard extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String detail;
+  final VoidCallback? action;
+
+  const _WebEmptyCard({
+    required this.icon,
+    required this.title,
+    required this.detail,
+    this.action,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: const Color(0xff1a1c1f),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white10),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: const Color(0xffffc857), size: 34),
+          const SizedBox(height: 9),
+          Text(
+            title,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 14,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 5),
+          Text(
+            detail,
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: Colors.white54, fontSize: 10.5),
+          ),
+          if (action != null) ...[
+            const SizedBox(height: 12),
+            TextButton(onPressed: action, child: const Text('BIBLIOTHÈQUE')),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _SettingsHubTile extends StatelessWidget {
   final IconData icon;
   final String title;
   final String subtitle;
@@ -2741,38 +3534,19 @@ class _SettingsHubTile
   });
 
   @override
-  Widget build(
-    BuildContext context,
-  ) {
+  Widget build(BuildContext context) {
     return Material(
-      color:
-          const Color(0xff120d0a),
-      borderRadius:
-          BorderRadius.circular(
-        14,
-      ),
+      color: const Color(0xff120d0a),
+      borderRadius: BorderRadius.circular(14),
       child: InkWell(
-        onTap:
-            onTap,
-        borderRadius:
-            BorderRadius.circular(
-          14,
-        ),
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
         child: Container(
           width: double.infinity,
-          padding:
-              const EdgeInsets.all(
-            14,
-          ),
+          padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
-            borderRadius:
-                BorderRadius.circular(
-              14,
-            ),
-            border: Border.all(
-              color:
-                  Colors.white12,
-            ),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: Colors.white12),
           ),
           child: Row(
             children: [
@@ -2780,54 +3554,34 @@ class _SettingsHubTile
                 width: 44,
                 height: 44,
                 decoration: BoxDecoration(
-                  color:
-                      const Color(0xff21150e),
-                  borderRadius:
-                      BorderRadius.circular(
-                    11,
-                  ),
+                  color: const Color(0xff21150e),
+                  borderRadius: BorderRadius.circular(11),
                   border: Border.all(
-                    color:
-                        const Color(0xffffc857)
-                            .withValues(
-                      alpha: 0.55,
-                    ),
+                    color: const Color(0xffffc857).withValues(alpha: 0.55),
                   ),
                 ),
-                child: Icon(
-                  icon,
-                  color:
-                      const Color(0xffffc857),
-                ),
+                child: Icon(icon, color: const Color(0xffffc857)),
               ),
 
-              const SizedBox(
-                width: 12,
-              ),
+              const SizedBox(width: 12),
 
               Expanded(
                 child: Column(
-                  crossAxisAlignment:
-                      CrossAxisAlignment.start,
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
                       title,
                       style: const TextStyle(
-                        color:
-                            Colors.white,
-                        fontWeight:
-                            FontWeight.bold,
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
                         fontSize: 14,
                       ),
                     ),
-                    const SizedBox(
-                      height: 3,
-                    ),
+                    const SizedBox(height: 3),
                     Text(
                       subtitle,
                       style: const TextStyle(
-                        color:
-                            Colors.white54,
+                        color: Colors.white54,
                         fontSize: 11,
                       ),
                     ),
@@ -2835,11 +3589,7 @@ class _SettingsHubTile
                 ),
               ),
 
-              const Icon(
-                Icons.chevron_right,
-                color:
-                    Color(0xffffc857),
-              ),
+              const Icon(Icons.chevron_right, color: Color(0xffffc857)),
             ],
           ),
         ),
@@ -2852,45 +3602,25 @@ class _SettingsHubTile
 // TITRE DES FENÊTRES
 // =============================================================================
 
-class _SheetTitle
-    extends StatelessWidget {
+class _SheetTitle extends StatelessWidget {
   final IconData icon;
   final String title;
 
-  const _SheetTitle({
-    required this.icon,
-    required this.title,
-  });
+  const _SheetTitle({required this.icon, required this.title});
 
   @override
-  Widget build(
-    BuildContext context,
-  ) {
+  Widget build(BuildContext context) {
     return Row(
-      mainAxisAlignment:
-          MainAxisAlignment.center,
+      mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        Icon(
-          icon,
-          color:
-              const Color(
-            0xffffc857,
-          ),
-        ),
-        const SizedBox(
-          width: 9,
-        ),
+        Icon(icon, color: const Color(0xffffc857)),
+        const SizedBox(width: 9),
         Text(
           title,
-          style:
-              const TextStyle(
-            color:
-                Color(
-              0xffffc857,
-            ),
+          style: const TextStyle(
+            color: Color(0xffffc857),
             fontSize: 20,
-            fontWeight:
-                FontWeight.bold,
+            fontWeight: FontWeight.bold,
             letterSpacing: 1.2,
           ),
         ),
@@ -2903,8 +3633,7 @@ class _SheetTitle
 // SWITCH PARAMÈTRE
 // =============================================================================
 
-class _TerminalSwitch
-    extends StatelessWidget {
+class _TerminalSwitch extends StatelessWidget {
   final IconData icon;
   final String title;
   final String subtitle;
@@ -2920,60 +3649,30 @@ class _TerminalSwitch
   });
 
   @override
-  Widget build(
-    BuildContext context,
-  ) {
+  Widget build(BuildContext context) {
     return Container(
-      margin:
-          const EdgeInsets.only(
-        bottom: 10,
-      ),
+      margin: const EdgeInsets.only(bottom: 10),
       decoration: BoxDecoration(
-        color:
-            const Color(0xff160e09),
-        borderRadius:
-            BorderRadius.circular(
-          14,
-        ),
-        border: Border.all(
-          color:
-              Colors.white12,
-        ),
+        color: const Color(0xff160e09),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.white12),
       ),
       child: SwitchListTile(
-        secondary: Icon(
-          icon,
-          color:
-              const Color(
-            0xffffc857,
-          ),
-        ),
+        secondary: Icon(icon, color: const Color(0xffffc857)),
         title: Text(
           title,
-          style:
-              const TextStyle(
-            color:
-                Colors.white,
-            fontWeight:
-                FontWeight.w600,
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w600,
           ),
         ),
         subtitle: Text(
           subtitle,
-          style:
-              const TextStyle(
-            color:
-                Colors.white54,
-            fontSize: 12,
-          ),
+          style: const TextStyle(color: Colors.white54, fontSize: 12),
         ),
         value: value,
-        activeThumbColor:
-            const Color(
-          0xffffc857,
-        ),
-        onChanged:
-            onChanged,
+        activeThumbColor: const Color(0xffffc857),
+        onChanged: onChanged,
       ),
     );
   }
@@ -2983,8 +3682,7 @@ class _TerminalSwitch
 // INFO COMPTE
 // =============================================================================
 
-class _AccountLine
-    extends StatelessWidget {
+class _AccountLine extends StatelessWidget {
   final IconData icon;
   final String label;
   final String value;
@@ -2996,68 +3694,37 @@ class _AccountLine
   });
 
   @override
-  Widget build(
-    BuildContext context,
-  ) {
+  Widget build(BuildContext context) {
     return Container(
       width: double.infinity,
-      padding:
-          const EdgeInsets.all(
-        14,
-      ),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color:
-            const Color(0xff160e09),
-        borderRadius:
-            BorderRadius.circular(
-          14,
-        ),
-        border: Border.all(
-          color:
-              Colors.white12,
-        ),
+        color: const Color(0xff160e09),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.white12),
       ),
       child: Row(
         children: [
-          Icon(
-            icon,
-            color:
-                const Color(
-              0xffffc857,
-            ),
-          ),
+          Icon(icon, color: const Color(0xffffc857)),
 
-          const SizedBox(
-            width: 12,
-          ),
+          const SizedBox(width: 12),
 
           Expanded(
             child: Column(
-              crossAxisAlignment:
-                  CrossAxisAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
                   label,
-                  style:
-                      const TextStyle(
-                    color:
-                        Colors.white38,
-                    fontSize: 11,
-                  ),
+                  style: const TextStyle(color: Colors.white38, fontSize: 11),
                 ),
 
-                const SizedBox(
-                  height: 2,
-                ),
+                const SizedBox(height: 2),
 
                 Text(
                   value,
-                  style:
-                      const TextStyle(
-                    color:
-                        Colors.white,
-                    fontWeight:
-                        FontWeight.bold,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
                   ),
                 ),
               ],
@@ -3073,32 +3740,21 @@ class _AccountLine
 // SÉCURITÉ DU COMPTE
 // =============================================================================
 
-class _SecuritySectionLabel
-    extends StatelessWidget {
+class _SecuritySectionLabel extends StatelessWidget {
   final String label;
 
-  const _SecuritySectionLabel({
-    required this.label,
-  });
+  const _SecuritySectionLabel({required this.label});
 
   @override
-  Widget build(
-    BuildContext context,
-  ) {
+  Widget build(BuildContext context) {
     return Align(
-      alignment:
-          Alignment.centerLeft,
+      alignment: Alignment.centerLeft,
       child: Text(
         label,
-        style:
-            const TextStyle(
-          color:
-              Color(
-            0xffffc857,
-          ),
+        style: const TextStyle(
+          color: Color(0xffffc857),
           fontSize: 12,
-          fontWeight:
-              FontWeight.bold,
+          fontWeight: FontWeight.bold,
           letterSpacing: 1.4,
         ),
       ),
@@ -3106,13 +3762,11 @@ class _SecuritySectionLabel
   }
 }
 
-class _BiometricSecurityTile
-    extends StatelessWidget {
+class _BiometricSecurityTile extends StatelessWidget {
   final bool available;
   final bool enabled;
   final bool busy;
-  final ValueChanged<bool>?
-      onChanged;
+  final ValueChanged<bool>? onChanged;
 
   const _BiometricSecurityTile({
     required this.available,
@@ -3122,39 +3776,23 @@ class _BiometricSecurityTile
   });
 
   @override
-  Widget build(
-    BuildContext context,
-  ) {
+  Widget build(BuildContext context) {
     final String subtitle;
 
     if (!available) {
-      subtitle =
-          'Aucune biométrie configurée sur cet appareil';
+      subtitle = 'Aucune biométrie configurée sur cet appareil';
     } else if (enabled) {
-      subtitle =
-          'Activée pour ce compte sur cet appareil';
+      subtitle = 'Activée pour ce compte sur cet appareil';
     } else {
-      subtitle =
-          'Disponible : empreinte ou reconnaissance faciale';
+      subtitle = 'Disponible : empreinte ou reconnaissance faciale';
     }
 
     return Container(
       decoration: BoxDecoration(
-        color:
-            const Color(
-          0xff160e09,
-        ),
-        borderRadius:
-            BorderRadius.circular(
-          14,
-        ),
+        color: const Color(0xff160e09),
+        borderRadius: BorderRadius.circular(14),
         border: Border.all(
-          color:
-              enabled
-                  ? const Color(
-                      0xffffc857,
-                    )
-                  : Colors.white12,
+          color: enabled ? const Color(0xffffc857) : Colors.white12,
         ),
       ),
       child: SwitchListTile(
@@ -3162,55 +3800,29 @@ class _BiometricSecurityTile
             ? const SizedBox(
                 width: 24,
                 height: 24,
-                child:
-                    CircularProgressIndicator(
+                child: CircularProgressIndicator(
                   strokeWidth: 2,
-                  color:
-                      Color(
-                    0xffffc857,
-                  ),
+                  color: Color(0xffffc857),
                 ),
               )
-            : const Icon(
-                Icons.fingerprint,
-                color:
-                    Color(
-                  0xffffc857,
-                ),
-              ),
+            : const Icon(Icons.fingerprint, color: Color(0xffffc857)),
         title: const Text(
           'Connexion biométrique',
-          style:
-              TextStyle(
-            color:
-                Colors.white,
-            fontWeight:
-                FontWeight.w600,
-          ),
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
         ),
         subtitle: Text(
           subtitle,
-          style:
-              const TextStyle(
-            color:
-                Colors.white54,
-            fontSize: 12,
-          ),
+          style: const TextStyle(color: Colors.white54, fontSize: 12),
         ),
         value: enabled,
-        activeThumbColor:
-            const Color(
-          0xffffc857,
-        ),
-        onChanged:
-            onChanged,
+        activeThumbColor: const Color(0xffffc857),
+        onChanged: onChanged,
       ),
     );
   }
 }
 
-class _AccountActionButton
-    extends StatelessWidget {
+class _AccountActionButton extends StatelessWidget {
   final IconData icon;
   final String title;
   final String subtitle;
@@ -3224,92 +3836,47 @@ class _AccountActionButton
   });
 
   @override
-  Widget build(
-    BuildContext context,
-  ) {
+  Widget build(BuildContext context) {
     return Material(
-      color:
-          const Color(
-        0xff160e09,
-      ),
-      borderRadius:
-          BorderRadius.circular(
-        14,
-      ),
+      color: const Color(0xff160e09),
+      borderRadius: BorderRadius.circular(14),
       child: InkWell(
         onTap: onTap,
-        borderRadius:
-            BorderRadius.circular(
-          14,
-        ),
+        borderRadius: BorderRadius.circular(14),
         child: Container(
-          width:
-              double.infinity,
-          padding:
-              const EdgeInsets.all(
-            14,
-          ),
-          decoration:
-              BoxDecoration(
-            borderRadius:
-                BorderRadius.circular(
-              14,
-            ),
-            border:
-                Border.all(
-              color:
-                  Colors.white12,
-            ),
+          width: double.infinity,
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: Colors.white12),
           ),
           child: Row(
             children: [
-              Icon(
-                icon,
-                color:
-                    const Color(
-                  0xffffc857,
-                ),
-              ),
-              const SizedBox(
-                width: 12,
-              ),
+              Icon(icon, color: const Color(0xffffc857)),
+              const SizedBox(width: 12),
               Expanded(
                 child: Column(
-                  crossAxisAlignment:
-                      CrossAxisAlignment.start,
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
                       title,
-                      style:
-                          const TextStyle(
-                        color:
-                            Colors.white,
-                        fontWeight:
-                            FontWeight.w600,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
-                    const SizedBox(
-                      height: 3,
-                    ),
+                    const SizedBox(height: 3),
                     Text(
                       subtitle,
-                      style:
-                          const TextStyle(
-                        color:
-                            Colors.white54,
+                      style: const TextStyle(
+                        color: Colors.white54,
                         fontSize: 12,
                       ),
                     ),
                   ],
                 ),
               ),
-              const Icon(
-                Icons.chevron_right,
-                color:
-                    Color(
-                  0xffffc857,
-                ),
-              ),
+              const Icon(Icons.chevron_right, color: Color(0xffffc857)),
             ],
           ),
         ),
@@ -3318,50 +3885,25 @@ class _AccountActionButton
   }
 }
 
-class _PasswordRulesCard
-    extends StatelessWidget {
+class _PasswordRulesCard extends StatelessWidget {
   const _PasswordRulesCard();
 
   @override
-  Widget build(
-    BuildContext context,
-  ) {
+  Widget build(BuildContext context) {
     return Container(
-      width:
-          double.infinity,
-      padding:
-          const EdgeInsets.all(
-        12,
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xff160e09),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white12),
       ),
-      decoration:
-          BoxDecoration(
-        color:
-            const Color(
-          0xff160e09,
-        ),
-        borderRadius:
-            BorderRadius.circular(
-          12,
-        ),
-        border:
-            Border.all(
-          color:
-              Colors.white12,
-        ),
-      ),
-      child:
-          const Text(
+      child: const Text(
         '• 10 caractères minimum\n'
         '• au moins une lettre\n'
         '• au moins un chiffre\n'
         '• au moins un caractère spécial',
-        style:
-            TextStyle(
-          color:
-              Colors.white54,
-          fontSize: 11,
-          height: 1.5,
-        ),
+        style: TextStyle(color: Colors.white54, fontSize: 11, height: 1.5),
       ),
     );
   }
@@ -3386,4 +3928,3 @@ class _EmailChangeInput {
     required this.currentPassword,
   });
 }
-

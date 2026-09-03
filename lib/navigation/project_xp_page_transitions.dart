@@ -3,16 +3,9 @@ import 'package:flutter/material.dart';
 class ProjectXpPageTransitionsBuilder extends PageTransitionsBuilder {
   const ProjectXpPageTransitionsBuilder();
 
-  // Transition générale entre tous les écrans de Project XP.
-  //
-  // Avant : 15000 ms
-  // Maintenant : 650 ms
-  //
-  // On conserve le fondu noir + apparition progressive de la nouvelle page,
-  // mais avec une durée adaptée à une utilisation normale de l'application.
-  static const Duration _duration = Duration(
-    milliseconds: 1800,
-  );
+  // Le fondu noir reste une signature de Project XP, mais une navigation
+  // courante ne doit jamais donner l'impression que l'application charge.
+  static const Duration _duration = Duration(milliseconds: 420);
 
   @override
   Duration get transitionDuration => _duration;
@@ -29,81 +22,50 @@ class ProjectXpPageTransitionsBuilder extends PageTransitionsBuilder {
     Widget child,
   ) {
     final Animation<double> blackOpacity =
-        TweenSequence<double>(
-      [
-        TweenSequenceItem<double>(
-          tween: Tween<double>(
-            begin: 0.0,
-            end: 1.0,
-          ).chain(
-            CurveTween(
-              curve: Curves.easeIn,
-            ),
+        TweenSequence<double>(<TweenSequenceItem<double>>[
+          TweenSequenceItem<double>(
+            tween: Tween<double>(
+              begin: 0.0,
+              end: 1.0,
+            ).chain(CurveTween(curve: Curves.easeOutCubic)),
+            weight: 28,
           ),
-          weight: 25,
-        ),
-        TweenSequenceItem<double>(
-          tween: ConstantTween<double>(
-            1.0,
+          TweenSequenceItem<double>(
+            tween: ConstantTween<double>(1.0),
+            weight: 72,
           ),
-          weight: 75,
-        ),
-      ],
-    ).animate(
-      animation,
-    );
+        ]).animate(animation);
 
     final Animation<double> pageOpacity =
-        TweenSequence<double>(
-      [
-        TweenSequenceItem<double>(
-          tween: ConstantTween<double>(
-            0.0,
+        TweenSequence<double>(<TweenSequenceItem<double>>[
+          TweenSequenceItem<double>(
+            tween: ConstantTween<double>(0.0),
+            weight: 28,
           ),
-          weight: 55,
-        ),
-        TweenSequenceItem<double>(
-          tween: Tween<double>(
-            begin: 0.0,
-            end: 1.0,
-          ).chain(
-            CurveTween(
-              curve: Curves.easeOut,
-            ),
+          TweenSequenceItem<double>(
+            tween: Tween<double>(
+              begin: 0.0,
+              end: 1.0,
+            ).chain(CurveTween(curve: Curves.easeOutCubic)),
+            weight: 72,
           ),
-          weight: 45,
-        ),
-      ],
-    ).animate(
-      animation,
-    );
+        ]).animate(animation);
 
-    final Animation<double> scaleAnimation =
-        Tween<double>(
-      begin: 0.985,
+    final Animation<double> scaleAnimation = Tween<double>(
+      begin: 0.992,
       end: 1.0,
-    ).animate(
-      CurvedAnimation(
-        parent: animation,
-        curve: Curves.easeOut,
-      ),
-    );
+    ).animate(CurvedAnimation(parent: animation, curve: Curves.easeOutCubic));
 
     return Stack(
       fit: StackFit.expand,
-      children: [
+      children: <Widget>[
         FadeTransition(
           opacity: blackOpacity,
-          child: const ColoredBox(
-            color: Colors.black,
-          ),
+          child: const ColoredBox(color: Colors.black),
         ),
         FadeTransition(
           opacity: pageOpacity,
-          child: ScaleTransition(
-            scale: scaleAnimation,
-            child: child,
-          ),
+          child: ScaleTransition(scale: scaleAnimation, child: child),
         ),
       ],
     );

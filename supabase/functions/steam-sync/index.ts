@@ -239,8 +239,15 @@ async function loadPlayerAchievements(
   apiKey: string,
 ): Promise<PlayerAchievementLoad> {
   const errors: string[] = []
+  let primaryEmpty = false
+  let fallbackEmpty = false
+  let primaryGameName = ''
+  let fallbackGameName = ''
 
   // Source principale : endpoint dédié aux succès.
+  // Une réponse vide n'est plus considérée comme définitive : on vérifie
+  // systématiquement le second endpoint avant de conclure qu'un jeu n'a
+  // réellement aucun accomplissement côté joueur.
   try {
     const playerUrl = new URL(
       'https://api.steampowered.com/ISteamUserStats/GetPlayerAchievements/v1/',
@@ -260,25 +267,34 @@ async function loadPlayerAchievements(
       const stats = playerstats as JsonRecord
 
       if (stats.success !== false) {
-        return {
-          rows: Array.isArray(stats.achievements)
-            ? stats.achievements
-                .filter(
-                  (item) =>
-                    item != null &&
-                    typeof item === 'object',
-                )
-                .map((item) => item as JsonRecord)
-            : [],
-          gameName: String(stats.gameName ?? '').trim(),
-          source: 'GetPlayerAchievements',
-          error: '',
-        }
-      }
+        const rows = Array.isArray(stats.achievements)
+          ? stats.achievements
+              .filter(
+                (item) =>
+                  item != null &&
+                  typeof item === 'object',
+              )
+              .map((item) => item as JsonRecord)
+          : []
 
-      const message = String(stats.error ?? '').trim()
-      if (message) {
-        errors.push(message)
+        primaryGameName = String(stats.gameName ?? '').trim()
+
+        if (rows.length > 0) {
+          return {
+            rows,
+            gameName: primaryGameName,
+            source: 'GetPlayerAchievements',
+            error: '',
+          }
+        }
+
+        primaryEmpty = true
+        errors.push('GetPlayerAchievements sans accomplissement')
+      } else {
+        const message = String(stats.error ?? '').trim()
+        if (message) {
+          errors.push(message)
+        }
       }
     } else {
       errors.push('Réponse GetPlayerAchievements invalide')
@@ -289,8 +305,8 @@ async function loadPlayerAchievements(
     )
   }
 
-  // Fallback V1.10.3a : certains jeux répondent mal au premier endpoint alors
-  // que GetUserStatsForGame expose bien les accomplissements du joueur.
+  // Fallback : certains jeux répondent mal au premier endpoint alors que
+  // GetUserStatsForGame expose bien les accomplissements du joueur.
   try {
     const statsUrl = new URL(
       'https://api.steampowered.com/ISteamUserStats/GetUserStatsForGame/v2/',
@@ -307,6 +323,7 @@ async function loadPlayerAchievements(
 
     if (playerstats && typeof playerstats === 'object') {
       const stats = playerstats as JsonRecord
+      fallbackGameName = String(stats.gameName ?? '').trim()
       const sourceRows = Array.isArray(stats.achievements)
         ? stats.achievements
         : []
@@ -338,15 +355,24 @@ async function loadPlayerAchievements(
           })
         }
 
-        return {
-          rows,
-          gameName: String(stats.gameName ?? '').trim(),
-          source: 'GetUserStatsForGame',
-          error: '',
+        if (rows.length > 0) {
+          return {
+            rows,
+            gameName: fallbackGameName,
+            source: 'GetUserStatsForGame',
+            error: '',
+          }
         }
-      }
 
-      errors.push('GetUserStatsForGame sans accomplissement')
+        errors.push(
+          'GetUserStatsForGame a renvoyé des accomplissements sans identifiant',
+        )
+      } else {
+        fallbackEmpty = true
+        errors.push('GetUserStatsForGame sans accomplissement')
+      }
+    } else {
+      errors.push('Réponse GetUserStatsForGame invalide')
     }
   } catch (error) {
     errors.push(
@@ -354,9 +380,24 @@ async function loadPlayerAchievements(
     )
   }
 
+  // On n'accepte une liste réellement vide que si les deux endpoints Steam
+  // ont répondu correctement et sont tous les deux vides. Si un seul des deux
+  // a échoué, on préfère signaler une progression indisponible plutôt que
+  // d'écraser une progression existante par un faux 0 %.
+  if (primaryEmpty && fallbackEmpty) {
+    return {
+      rows: [],
+      gameName: primaryGameName || fallbackGameName,
+      source: 'confirmed-empty',
+      error: errors
+        .filter((value) => value.trim().length > 0)
+        .join(' / '),
+    }
+  }
+
   return {
     rows: null,
-    gameName: '',
+    gameName: primaryGameName || fallbackGameName,
     source: '',
     error: errors
       .filter((value) => value.trim().length > 0)
@@ -368,9 +409,81 @@ function looksLikeNoStats(raw: string) {
   const value = raw.toLowerCase()
 
   return value.includes('no stats') ||
+    value.includes('has no stats') ||
     value.includes('does not have stats') ||
+    value.includes('no stats are available') ||
+    value.includes('stats are not available for this app') ||
     value.includes('no achievements') ||
+    value.includes('does not have achievements') ||
     value.includes('requested app has no stats')
+}
+
+async function loadStoreAchievementSupport(
+  appId: string,
+): Promise<boolean | null> {
+  try {
+    const url = new URL(
+      'https://store.steampowered.com/api/appdetails',
+    )
+    url.searchParams.set('appids', appId)
+    url.searchParams.set('cc', 'us')
+    url.searchParams.set('l', 'english')
+
+    const raw = await steamJson(url)
+    if (!raw || typeof raw !== 'object') {
+      return null
+    }
+
+    const appRaw = (raw as JsonRecord)[appId]
+    if (!appRaw || typeof appRaw !== 'object') {
+      return null
+    }
+
+    const app = appRaw as JsonRecord
+    if (app.success !== true ||
+        !app.data ||
+        typeof app.data !== 'object') {
+      return null
+    }
+
+    const data = app.data as JsonRecord
+    const categories = Array.isArray(data.categories)
+      ? data.categories
+      : []
+
+    // Une fiche Store valide contient normalement plusieurs catégories.
+    // Si elles sont absentes, on ne déduit rien afin d'éviter un faux
+    // "sans succès" sur une réponse Steam incomplète.
+    if (categories.length === 0) {
+      return null
+    }
+
+    for (const item of categories) {
+      if (!item || typeof item !== 'object') {
+        continue
+      }
+
+      const category = item as JsonRecord
+      const id = Number(category.id ?? -1)
+      const description = String(
+        category.description ?? '',
+      ).toLowerCase()
+
+      // Steam utilise actuellement la catégorie 22 pour les succès.
+      // Le libellé sert de garde supplémentaire si l'identifiant évolue.
+      if (id === 22 ||
+          description.includes('steam achievements') ||
+          description.includes('succès steam')) {
+        return true
+      }
+    }
+
+    return false
+  } catch (_) {
+    // La fiche Store est uniquement un filet de sécurité : une panne de ce
+    // endpoint ne doit jamais transformer un jeu en faux "sans succès".
+    return null
+  }
 }
 
 async function syncAchievements(body: JsonRecord, apiKey: string) {
@@ -393,19 +506,27 @@ async function syncAchievements(body: JsonRecord, apiKey: string) {
   )
 
   if (player.rows == null) {
-    if (schema.schemaById.size === 0 &&
-        looksLikeNoStats(player.error)) {
-      return jsonResponse({
-        ok: true,
-        steamId,
-        appId,
-        gameName: schema.gameName,
-        unlocked: 0,
-        total: 0,
-        achievements: [],
-        noAchievements: true,
-        playerProgressAvailable: true,
-      })
+    if (schema.schemaById.size === 0) {
+      const storeAchievementSupport =
+        await loadStoreAchievementSupport(appId)
+
+      if (looksLikeNoStats(player.error) ||
+          storeAchievementSupport === false) {
+        return jsonResponse({
+          ok: true,
+          steamId,
+          appId,
+          gameName: schema.gameName,
+          unlocked: 0,
+          total: 0,
+          achievements: [],
+          noAchievements: true,
+          playerProgressAvailable: true,
+          source: storeAchievementSupport === false
+            ? 'steam-store-no-achievements'
+            : 'steam-api-no-stats',
+        })
+      }
     }
 
     if (schema.schemaById.size > 0) {
@@ -426,6 +547,36 @@ async function syncAchievements(body: JsonRecord, apiKey: string) {
       error:
         player.error ||
         'Les succès de ce jeu sont privés ou indisponibles sur Steam.',
+    })
+  }
+
+  // Les deux endpoints joueur ont confirmé une liste vide. Si le schéma Steam
+  // connaît pourtant des succès, cette contradiction ne doit jamais devenir
+  // un faux 0 %. On signale le jeu comme temporairement indisponible et
+  // Project XP conserve les données précédentes.
+  if (player.rows.length === 0) {
+    if (schema.schemaById.size > 0) {
+      return jsonResponse({
+        ok: false,
+        code: 'player_progress_unavailable',
+        achievementCount: schema.schemaById.size,
+        error:
+          `Steam expose ${schema.schemaById.size} succès pour ce jeu, ` +
+          'mais les deux endpoints de progression ont renvoyé une liste vide.',
+      })
+    }
+
+    return jsonResponse({
+      ok: true,
+      steamId,
+      appId,
+      gameName: player.gameName || schema.gameName,
+      unlocked: 0,
+      total: 0,
+      achievements: [],
+      noAchievements: true,
+      playerProgressAvailable: true,
+      source: player.source,
     })
   }
 
