@@ -37,15 +37,11 @@ flutter:
 
   assets:
     - assets/images/
-    - assets/icon/
     - assets/images/hall/
     - assets/images/tavern/
     - assets/audio/music/
     - assets/audio/sfx/
-    - assets/images/hall_extension_top.png
-    - assets/images/hall_extension_bottom.png
     - assets/images/bjorn/bjorn_idle.png
-    - assets/images/hall_foreground_pc_counter.png
     - assets/images/avatars/male/base/
     - assets/images/avatars/male/hair/
     - assets/images/avatars/male/beard/
