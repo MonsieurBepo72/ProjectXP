@@ -1,4 +1,4 @@
-﻿import 'package:flutter/foundation.dart';
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -81,13 +81,7 @@ class SteamFullSyncResult {
   });
 }
 
-enum SteamSyncPhase {
-  idle,
-  library,
-  achievements,
-  completed,
-  failed,
-}
+enum SteamSyncPhase { idle, library, achievements, completed, failed }
 
 class SteamSyncUiState {
   final SteamSyncPhase phase;
@@ -105,15 +99,14 @@ class SteamSyncUiState {
   });
 
   const SteamSyncUiState.idle()
-      : phase = SteamSyncPhase.idle,
-        label = '',
-        current = 0,
-        total = 0,
-        message = null;
+    : phase = SteamSyncPhase.idle,
+      label = '',
+      current = 0,
+      total = 0,
+      message = null;
 
   bool get running =>
-      phase == SteamSyncPhase.library ||
-      phase == SteamSyncPhase.achievements;
+      phase == SteamSyncPhase.library || phase == SteamSyncPhase.achievements;
 }
 
 class SteamAchievementSyncResult {
@@ -141,16 +134,11 @@ class SteamSyncService {
   static String? _cachedOfficialSteamId;
 
   static final ValueNotifier<SteamSyncUiState> syncState =
-      ValueNotifier<SteamSyncUiState>(
-    const SteamSyncUiState.idle(),
-  );
+      ValueNotifier<SteamSyncUiState>(const SteamSyncUiState.idle());
 
-  static bool get backgroundSyncRunning =>
-      _activeSync != null;
-  static const String _steamRefPrefix =
-      'project_xp_steam_reference_';
-  static const String _steamIdPrefix =
-      'project_xp_steam_id_';
+  static bool get backgroundSyncRunning => _activeSync != null;
+  static const String _steamRefPrefix = 'project_xp_steam_reference_';
+  static const String _steamIdPrefix = 'project_xp_steam_id_';
 
   static Future<String?> _currentUserId() {
     return AuthService.getCurrentUserId();
@@ -161,8 +149,7 @@ class SteamSyncService {
     if (userId == null || userId.isEmpty) {
       return null;
     }
-    final SharedPreferences prefs =
-        await SharedPreferences.getInstance();
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
     return prefs.getString('$_steamRefPrefix$userId');
   }
 
@@ -174,17 +161,10 @@ class SteamSyncService {
     if (userId == null || userId.isEmpty) {
       return;
     }
-    final SharedPreferences prefs =
-        await SharedPreferences.getInstance();
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
     await Future.wait<bool>([
-      prefs.setString(
-        '$_steamRefPrefix$userId',
-        reference.trim(),
-      ),
-      prefs.setString(
-        '$_steamIdPrefix$userId',
-        steamId,
-      ),
+      prefs.setString('$_steamRefPrefix$userId', reference.trim()),
+      prefs.setString('$_steamIdPrefix$userId', steamId),
     ]);
   }
 
@@ -193,8 +173,7 @@ class SteamSyncService {
     if (userId == null || userId.isEmpty) {
       return null;
     }
-    final SharedPreferences prefs =
-        await SharedPreferences.getInstance();
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
     return prefs.getString('$_steamIdPrefix$userId');
   }
 
@@ -208,12 +187,10 @@ class SteamSyncService {
       return cached;
     }
 
-    final GamingAccountLink? official =
-        await GamingAccountsService.account(
+    final GamingAccountLink? official = await GamingAccountsService.account(
       GamingPlatformProvider.steam,
     );
-    final String officialId =
-        official?.providerUserId.trim() ?? '';
+    final String officialId = official?.providerUserId.trim() ?? '';
 
     if (officialId.isNotEmpty) {
       _cachedOfficialSteamId = officialId;
@@ -223,32 +200,27 @@ class SteamSyncService {
   }
 
   static Future<String?> getLinkedSteamId() async {
-    final String officialId =
-        (await _officialSteamId() ?? '').trim();
+    final String officialId = (await _officialSteamId() ?? '').trim();
     if (officialId.isNotEmpty) {
       return officialId;
     }
 
-    final String legacy =
-        (await getSavedSteamId() ?? '').trim();
+    final String legacy = (await getSavedSteamId() ?? '').trim();
     return legacy.isEmpty ? null : legacy;
   }
 
   static Future<String?> getSyncReference() async {
-    final String officialId =
-        (await _officialSteamId() ?? '').trim();
+    final String officialId = (await _officialSteamId() ?? '').trim();
     if (officialId.isNotEmpty) {
       return officialId;
     }
 
-    final String savedId =
-        (await getSavedSteamId() ?? '').trim();
+    final String savedId = (await getSavedSteamId() ?? '').trim();
     if (savedId.isNotEmpty) {
       return savedId;
     }
 
-    final String legacyReference =
-        (await getSavedReference() ?? '').trim();
+    final String legacyReference = (await getSavedReference() ?? '').trim();
     return legacyReference.isEmpty ? null : legacyReference;
   }
 
@@ -263,18 +235,15 @@ class SteamSyncService {
       return;
     }
 
-    final SharedPreferences prefs =
-        await SharedPreferences.getInstance();
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
     await Future.wait<bool>([
       prefs.remove('$_steamRefPrefix$userId'),
       prefs.remove('$_steamIdPrefix$userId'),
     ]);
   }
 
-  static Future<SteamLibrarySyncResult>
-      syncLibraryForLinkedAccount() async {
-    final String reference =
-        (await getSyncReference() ?? '').trim();
+  static Future<SteamLibrarySyncResult> syncLibraryForLinkedAccount() async {
+    final String reference = (await getSyncReference() ?? '').trim();
 
     if (reference.isEmpty) {
       throw const SteamSyncException(
@@ -293,8 +262,7 @@ class SteamSyncService {
   /// démarrage afin de garder l'application fluide ; le bouton SYNCHRONISER
   /// TOUT force, lui, la totalité de la bibliothèque.
   static Future<void> syncAtStartup() async {
-    final String reference =
-        (await getSyncReference() ?? '').trim();
+    final String reference = (await getSyncReference() ?? '').trim();
 
     if (reference.isEmpty) {
       return;
@@ -307,13 +275,9 @@ class SteamSyncService {
         staleAfter: const Duration(hours: 8),
       );
     } on SteamSyncException catch (error) {
-      debugPrint(
-        'Sync Steam dÃ©marrage ignorÃ©e : ${error.message}',
-      );
+      debugPrint('Sync Steam démarrage ignorée : ${error.message}');
     } catch (error) {
-      debugPrint(
-        'Sync Steam dÃ©marrage ignorÃ©e : $error',
-      );
+      debugPrint('Sync Steam démarrage ignorée : $error');
     }
   }
 
@@ -322,15 +286,13 @@ class SteamSyncService {
     int? maxGames,
     Duration staleAfter = const Duration(hours: 24),
   }) {
-    final Future<SteamFullSyncResult>? active =
-        _activeSync;
+    final Future<SteamFullSyncResult>? active = _activeSync;
 
     if (active != null) {
       return active;
     }
 
-    final Future<SteamFullSyncResult> future =
-        _runFullSync(
+    final Future<SteamFullSyncResult> future = _runFullSync(
       force: force,
       maxGames: maxGames,
       staleAfter: staleAfter,
@@ -345,79 +307,68 @@ class SteamSyncService {
     required int? maxGames,
     required Duration staleAfter,
   }) async {
-    final String reference =
-        (await getSyncReference() ?? '').trim();
+    final String reference = (await getSyncReference() ?? '').trim();
 
     if (reference.isEmpty) {
       throw const SteamSyncException(
-        'Lie dâ€™abord ton compte Steam depuis COMPTES.',
+        'Lie d’abord ton compte Steam depuis COMPTES.',
       );
     }
 
     syncState.value = const SteamSyncUiState(
       phase: SteamSyncPhase.library,
-      label: 'Synchronisation Steam â€¢ BibliothÃ¨queâ€¦',
+      label: 'Synchronisation Steam • Bibliothèque…',
     );
 
     try {
-      final SteamLibrarySyncResult libraryResult =
-          await syncLibrary(reference);
+      final SteamLibrarySyncResult libraryResult = await syncLibrary(reference);
 
       final List<GameLibraryEntry> library =
-          await GameLibraryService
-              .loadCurrentLibraryConsolidated();
+          await GameLibraryService.loadCurrentLibraryConsolidated();
 
       syncState.value = const SteamSyncUiState(
         phase: SteamSyncPhase.achievements,
-        label: 'Synchronisation Steam â€¢ SuccÃ¨sâ€¦',
+        label: 'Synchronisation Steam • Succès…',
       );
 
       final SteamAllAchievementSyncResult achievementResult =
           await syncAllAchievements(
-        library: library,
-        activityChangedAppIds:
-            libraryResult.activityChangedAppIds,
-        force: force,
-        staleAfter: staleAfter,
-        maxGames: maxGames,
-        onProgress: (
-          int current,
-          int total,
-          String title,
-        ) {
-          syncState.value = SteamSyncUiState(
-            phase: SteamSyncPhase.achievements,
-            label: total <= 0
-                ? 'SuccÃ¨s Steam Ã  jour'
-                : 'SuccÃ¨s $current / $total â€¢ $title',
-            current: current,
-            total: total,
+            library: library,
+            activityChangedAppIds: libraryResult.activityChangedAppIds,
+            force: force,
+            staleAfter: staleAfter,
+            maxGames: maxGames,
+            onProgress: (int current, int total, String title) {
+              syncState.value = SteamSyncUiState(
+                phase: SteamSyncPhase.achievements,
+                label: total <= 0
+                    ? 'Succès Steam à jour'
+                    : 'Succès $current / $total • $title',
+                current: current,
+                total: total,
+              );
+            },
           );
-        },
-      );
 
       final List<String> details = <String>[
         '${libraryResult.detected} jeux',
-        '${achievementResult.checkedGames} jeux vÃ©rifiÃ©s',
+        '${achievementResult.checkedGames} jeux vérifiés',
         if (achievementResult.totalAchievementsKnown > 0)
-          '${achievementResult.totalAchievementsKnown} succÃ¨s connus',
+          '${achievementResult.totalAchievementsKnown} succès connus',
         if (achievementResult.gamesWithoutAchievements > 0)
-          '${achievementResult.gamesWithoutAchievements} sans succÃ¨s',
+          '${achievementResult.gamesWithoutAchievements} sans succès',
         if (achievementResult.unavailableGames > 0)
-          '${achievementResult.unavailableGames} Ã  revoir',
+          '${achievementResult.unavailableGames} à revoir',
         if (achievementResult.newlyUnlocked > 0)
-          '${achievementResult.newlyUnlocked} nouveaux succÃ¨s',
+          '${achievementResult.newlyUnlocked} nouveaux succès',
       ];
 
-      String message =
-          'Synchronisation terminÃ©e â€¢ ${details.join(' â€¢ ')}.';
+      String message = 'Synchronisation terminée • ${details.join(' • ')}.';
 
       if (achievementResult.issues.isNotEmpty) {
-        final SteamAchievementSyncIssue first =
-            achievementResult.issues.first;
+        final SteamAchievementSyncIssue first = achievementResult.issues.first;
 
-        message +=
-            ' Exemple : ${first.title} â€” ${first.message}';
+        message += ' Exemple : ${first.title} — ${first.message}';
       }
 
       if (libraryResult.warning?.trim().isNotEmpty == true) {
@@ -426,7 +377,7 @@ class SteamSyncService {
 
       syncState.value = SteamSyncUiState(
         phase: SteamSyncPhase.completed,
-        label: 'Synchronisation terminÃ©e',
+        label: 'Synchronisation terminée',
         message: message,
       );
 
@@ -437,22 +388,19 @@ class SteamSyncService {
     } on SteamSyncException catch (error) {
       syncState.value = SteamSyncUiState(
         phase: SteamSyncPhase.failed,
-        label: 'Synchronisation Ã©chouÃ©e',
-        message:
-            'Synchronisation Ã©chouÃ©e â€¢ ${error.message}',
+        label: 'Synchronisation échouée',
+        message: 'Synchronisation échouée • ${error.message}',
       );
       rethrow;
     } catch (error) {
-      final SteamSyncException wrapped =
-          SteamSyncException(
+      final SteamSyncException wrapped = SteamSyncException(
         _friendlyFunctionError(error.toString()),
       );
 
       syncState.value = SteamSyncUiState(
         phase: SteamSyncPhase.failed,
-        label: 'Synchronisation Ã©chouÃ©e',
-        message:
-            'Synchronisation Ã©chouÃ©e â€¢ ${wrapped.message}',
+        label: 'Synchronisation échouée',
+        message: 'Synchronisation échouée • ${wrapped.message}',
       );
 
       throw wrapped;
@@ -474,14 +422,11 @@ class SteamSyncService {
     await SupabaseService.ensureAnonymousSession();
 
     try {
-      final FunctionResponse response =
-          await SupabaseService.client.functions.invoke(
-        'steam-sync',
-        body: {
-          'action': 'library',
-          'steamRef': cleanReference,
-        },
-      );
+      final FunctionResponse response = await SupabaseService.client.functions
+          .invoke(
+            'steam-sync',
+            body: {'action': 'library', 'steamRef': cleanReference},
+          );
 
       final dynamic raw = response.data;
       if (raw is! Map) {
@@ -490,12 +435,10 @@ class SteamSyncService {
         );
       }
 
-      final Map<String, dynamic> data =
-          Map<String, dynamic>.from(raw);
+      final Map<String, dynamic> data = Map<String, dynamic>.from(raw);
       if (data['ok'] != true) {
         throw SteamSyncException(
-          data['error']?.toString() ??
-              'La synchronisation Steam a échoué.',
+          data['error']?.toString() ?? 'La synchronisation Steam a échoué.',
         );
       }
 
@@ -514,8 +457,9 @@ class SteamSyncService {
           <String, GamePlatformProfile>{};
 
       for (final GameLibraryEntry existing in previousLibrary) {
-        final GamePlatformProfile? steam =
-            existing.platformProfile(GamePlatform.steam);
+        final GamePlatformProfile? steam = existing.platformProfile(
+          GamePlatform.steam,
+        );
         final String appId = steam?.externalId?.trim() ?? '';
         if (appId.isNotEmpty) {
           previousSteamByAppId[appId] = steam!;
@@ -529,8 +473,7 @@ class SteamSyncService {
         if (item is! Map) {
           continue;
         }
-        final Map<String, dynamic> game =
-            Map<String, dynamic>.from(item);
+        final Map<String, dynamic> game = Map<String, dynamic>.from(item);
         final String appId = game['appid']?.toString() ?? '';
         final String title = game['name']?.toString().trim() ?? '';
         if (appId.isEmpty || title.isEmpty) {
@@ -539,28 +482,17 @@ class SteamSyncService {
 
         final int playtime = game['playtime_forever'] is int
             ? game['playtime_forever'] as int
-            : int.tryParse(
-                  game['playtime_forever']?.toString() ?? '',
-                ) ??
-                0;
+            : int.tryParse(game['playtime_forever']?.toString() ?? '') ?? 0;
 
-        final int lastPlayedSeconds =
-            game['rtime_last_played'] is int
-                ? game['rtime_last_played'] as int
-                : int.tryParse(
-                      game['rtime_last_played']?.toString() ?? '',
-                    ) ??
-                    0;
+        final int lastPlayedSeconds = game['rtime_last_played'] is int
+            ? game['rtime_last_played'] as int
+            : int.tryParse(game['rtime_last_played']?.toString() ?? '') ?? 0;
 
-        final DateTime? lastPlayedAt =
-            lastPlayedSeconds > 0
-                ? DateTime.fromMillisecondsSinceEpoch(
-                    lastPlayedSeconds * 1000,
-                  )
-                : null;
+        final DateTime? lastPlayedAt = lastPlayedSeconds > 0
+            ? DateTime.fromMillisecondsSinceEpoch(lastPlayedSeconds * 1000)
+            : null;
 
-        final GamePlatformProfile steamProfile =
-            GamePlatformProfile(
+        final GamePlatformProfile steamProfile = GamePlatformProfile(
           platform: GamePlatform.steam,
           source: GameSource.steam,
           externalId: appId,
@@ -568,15 +500,13 @@ class SteamSyncService {
           lastPlayedAt: lastPlayedAt,
         );
 
-        final GamePlatformProfile? previous =
-            previousSteamByAppId[appId];
+        final GamePlatformProfile? previous = previousSteamByAppId[appId];
         final bool playtimeChanged =
-            previous == null ||
-                previous.playtimeMinutes != playtime;
+            previous == null || previous.playtimeMinutes != playtime;
         final bool lastPlayedChanged =
             previous == null ||
-                previous.lastPlayedAt?.millisecondsSinceEpoch !=
-                    lastPlayedAt?.millisecondsSinceEpoch;
+            previous.lastPlayedAt?.millisecondsSinceEpoch !=
+                lastPlayedAt?.millisecondsSinceEpoch;
 
         if (playtimeChanged || lastPlayedChanged) {
           activityChangedAppIds.add(appId);
@@ -612,8 +542,7 @@ class SteamSyncService {
             coverFallbackUrls: coverFallbackUrls,
             playtimeMinutes: playtime,
             achievements: const GameAchievementSummary(),
-            platformProfiles:
-                <GamePlatformProfile>[steamProfile],
+            platformProfiles: <GamePlatformProfile>[steamProfile],
             addedAt: now,
             updatedAt: now,
           ),
@@ -622,30 +551,22 @@ class SteamSyncService {
 
       final ({int added, int updated}) merge =
           await GameLibraryService.mergeSteamGames(imported);
-      await _saveIdentity(
-        reference: cleanReference,
-        steamId: steamId,
-      );
+      await _saveIdentity(reference: cleanReference, steamId: steamId);
 
       return SteamLibrarySyncResult(
         steamId: steamId,
         detected: imported.length,
         added: merge.added,
         updated: merge.updated,
-        activityChangedAppIds:
-            Set<String>.unmodifiable(activityChangedAppIds),
+        activityChangedAppIds: Set<String>.unmodifiable(activityChangedAppIds),
         warning: data['warning']?.toString(),
       );
     } on FunctionException catch (error) {
-      throw SteamSyncException(
-        _friendlyFunctionError(error.details),
-      );
+      throw SteamSyncException(_friendlyFunctionError(error.details));
     } on SteamSyncException {
       rethrow;
     } catch (error) {
-      throw SteamSyncException(
-        _friendlyFunctionError(error.toString()),
-      );
+      throw SteamSyncException(_friendlyFunctionError(error.toString()));
     }
   }
 
@@ -654,8 +575,9 @@ class SteamSyncService {
     bool persist = true,
     bool announceNewUnlocks = true,
   }) async {
-    final GamePlatformProfile? steamProfile =
-        entry.platformProfile(GamePlatform.steam);
+    final GamePlatformProfile? steamProfile = entry.platformProfile(
+      GamePlatform.steam,
+    );
 
     if (steamProfile == null ||
         steamProfile.externalId == null ||
@@ -675,25 +597,22 @@ class SteamSyncService {
     await SupabaseService.ensureAnonymousSession();
 
     try {
-      final FunctionResponse response =
-          await SupabaseService.client.functions.invoke(
-        'steam-sync',
-        body: {
-          'action': 'achievements',
-          'steamId': steamId,
-          'appId': steamProfile.externalId,
-        },
-      );
+      final FunctionResponse response = await SupabaseService.client.functions
+          .invoke(
+            'steam-sync',
+            body: {
+              'action': 'achievements',
+              'steamId': steamId,
+              'appId': steamProfile.externalId,
+            },
+          );
 
       final dynamic raw = response.data;
       if (raw is! Map) {
-        throw const SteamSyncException(
-          'Réponse Steam invalide.',
-        );
+        throw const SteamSyncException('Réponse Steam invalide.');
       }
 
-      final Map<String, dynamic> data =
-          Map<String, dynamic>.from(raw);
+      final Map<String, dynamic> data = Map<String, dynamic>.from(raw);
 
       if (data['ok'] != true) {
         throw SteamSyncException(
@@ -702,11 +621,9 @@ class SteamSyncService {
         );
       }
 
-      final dynamic rawAchievements =
-          data['achievements'];
+      final dynamic rawAchievements = data['achievements'];
 
-      final List<GameAchievementDetail> remote =
-          <GameAchievementDetail>[];
+      final List<GameAchievementDetail> remote = <GameAchievementDetail>[];
 
       if (rawAchievements is List) {
         for (final dynamic item in rawAchievements) {
@@ -714,37 +631,29 @@ class SteamSyncService {
             continue;
           }
 
-          final Map<String, dynamic> row =
-              Map<String, dynamic>.from(item);
+          final Map<String, dynamic> row = Map<String, dynamic>.from(item);
 
-          final String id =
-              row['id']?.toString().trim() ?? '';
+          final String id = row['id']?.toString().trim() ?? '';
 
           if (id.isEmpty) {
             continue;
           }
 
-          final String icon =
-              row['iconUrl']?.toString().trim() ?? '';
+          final String icon = row['iconUrl']?.toString().trim() ?? '';
 
           remote.add(
             GameAchievementDetail(
               id: id,
-              name:
-                  row['name']?.toString().trim().isNotEmpty ==
-                          true
-                      ? row['name'].toString().trim()
-                      : id,
-              description:
-                  row['description']?.toString().trim() ?? '',
+              name: row['name']?.toString().trim().isNotEmpty == true
+                  ? row['name'].toString().trim()
+                  : id,
+              description: row['description']?.toString().trim() ?? '',
               iconUrl: icon.isEmpty ? null : icon,
               hidden: row['hidden'] == true,
               kind: GameAchievementKind.generic,
-              platformUnlocked:
-                  row['platformUnlocked'] == true,
+              platformUnlocked: row['platformUnlocked'] == true,
               manuallyUnlocked: false,
-              platformUnlockedAt:
-                  DateTime.tryParse(
+              platformUnlockedAt: DateTime.tryParse(
                 row['platformUnlockedAt']?.toString() ?? '',
               ),
             ),
@@ -754,51 +663,47 @@ class SteamSyncService {
 
       final Map<String, GameAchievementDetail> previousById =
           <String, GameAchievementDetail>{
-        for (final GameAchievementDetail achievement
-            in steamProfile.achievementDetails)
-          achievement.id: achievement,
-      };
+            for (final GameAchievementDetail achievement
+                in steamProfile.achievementDetails)
+              achievement.id: achievement,
+          };
 
       final List<GameAchievementDetail> newlyUnlockedDetails =
           <GameAchievementDetail>[];
 
-      final List<GameAchievementDetail> merged =
-          remote.map(
-        (GameAchievementDetail incoming) {
-          final GameAchievementDetail? previous =
-              previousById[incoming.id];
+      final List<GameAchievementDetail> merged = remote.map((
+        GameAchievementDetail incoming,
+      ) {
+        final GameAchievementDetail? previous = previousById[incoming.id];
 
-          final bool wasUnlocked =
-              previous?.isUnlocked ?? false;
+        final bool wasUnlocked = previous?.isUnlocked ?? false;
 
-          // Une coche manuelle reste vraie tant que Steam ne l'a pas encore
-          // confirmée. Dès que Steam confirme, la source devient officielle.
-          final bool manualStillNeeded =
-              incoming.platformUnlocked
-                  ? false
-                  : previous?.manuallyUnlocked ?? false;
+        // Une coche manuelle reste vraie tant que Steam ne l'a pas encore
+        // confirmée. Dès que Steam confirme, la source devient officielle.
+        final bool manualStillNeeded = incoming.platformUnlocked
+            ? false
+            : previous?.manuallyUnlocked ?? false;
 
-          final GameAchievementDetail result =
-              incoming.copyWith(
-            manuallyUnlocked: manualStillNeeded,
-            manuallyUnlockedAt: manualStillNeeded
-                ? previous?.manuallyUnlockedAt
-                : null,
-            clearManuallyUnlockedAt: !manualStillNeeded,
-          );
+        final GameAchievementDetail result = incoming.copyWith(
+          manuallyUnlocked: manualStillNeeded,
+          manuallyUnlockedAt: manualStillNeeded
+              ? previous?.manuallyUnlockedAt
+              : null,
+          clearManuallyUnlockedAt: !manualStillNeeded,
+        );
 
-          if (!wasUnlocked && result.isUnlocked) {
-            newlyUnlockedDetails.add(result);
-          }
+        if (!wasUnlocked && result.isUnlocked) {
+          newlyUnlockedDetails.add(result);
+        }
 
-          return result;
-        },
-      ).toList();
+        return result;
+      }).toList();
 
       // On conserve les accomplissements ajoutés/cochés manuellement qui ne
       // font pas partie du catalogue renvoyé par Steam.
-      final Set<String> remoteIds =
-          merged.map((achievement) => achievement.id).toSet();
+      final Set<String> remoteIds = merged
+          .map((achievement) => achievement.id)
+          .toSet();
 
       for (final GameAchievementDetail previous
           in steamProfile.achievementDetails) {
@@ -808,13 +713,10 @@ class SteamSyncService {
       }
 
       merged.sort(
-        (a, b) => a.name.toLowerCase().compareTo(
-              b.name.toLowerCase(),
-            ),
+        (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
       );
 
-      final GamePlatformProfile updatedSteam =
-          steamProfile.copyWith(
+      final GamePlatformProfile updatedSteam = steamProfile.copyWith(
         achievementDetails: merged,
         achievementCatalogInitialized: true,
         achievementsLastSyncedAt: DateTime.now(),
@@ -826,11 +728,8 @@ class SteamSyncService {
       final bool firstDetailedSync =
           !steamProfile.achievementCatalogInitialized;
 
-      GameLibraryEntry updated =
-          entry.withPlatformProfile(
-        updatedSteam.copyWith(
-          achievements: summary,
-        ),
+      GameLibraryEntry updated = entry.withPlatformProfile(
+        updatedSteam.copyWith(achievements: summary),
       );
 
       // Compatibilité avec les anciennes fiches qui étaient elles-mêmes Steam.
@@ -866,27 +765,19 @@ class SteamSyncService {
       return SteamAchievementSyncResult(
         summary: summary,
         achievements: merged,
-        newlyUnlocked:
-            firstDetailedSync
-                ? 0
-                : newlyUnlockedDetails.length,
+        newlyUnlocked: firstDetailedSync ? 0 : newlyUnlockedDetails.length,
         updatedEntry: updated,
-        newlyUnlockedDetails:
-            List<GameAchievementDetail>.unmodifiable(
+        newlyUnlockedDetails: List<GameAchievementDetail>.unmodifiable(
           newlyUnlockedDetails,
         ),
         firstDetailedSync: firstDetailedSync,
       );
     } on FunctionException catch (error) {
-      throw SteamSyncException(
-        _friendlyFunctionError(error.details),
-      );
+      throw SteamSyncException(_friendlyFunctionError(error.details));
     } on SteamSyncException {
       rethrow;
     } catch (error) {
-      throw SteamSyncException(
-        _friendlyFunctionError(error.toString()),
-      );
+      throw SteamSyncException(_friendlyFunctionError(error.toString()));
     }
   }
 
@@ -895,8 +786,7 @@ class SteamSyncService {
     required GamePlatformProfile updatedSteam,
     required List<GameAchievementDetail> achievements,
   }) async {
-    for (final GameAchievementDetail achievement
-        in achievements.take(5)) {
+    for (final GameAchievementDetail achievement in achievements.take(5)) {
       await GameLibraryService.addActivity(
         title: 'Succès « ${achievement.name} » obtenu',
         detail: '${entry.title} • Steam',
@@ -905,49 +795,43 @@ class SteamSyncService {
 
     if (achievements.length > 5) {
       await GameLibraryService.addActivity(
-        title:
-            '${achievements.length - 5} autres succès sur ${entry.title}',
+        title: '${achievements.length - 5} autres succès sur ${entry.title}',
         detail: updatedSteam.progressText,
       );
     }
   }
 
-  static Future<SteamAllAchievementSyncResult>
-      syncAllAchievements({
+  static Future<SteamAllAchievementSyncResult> syncAllAchievements({
     required List<GameLibraryEntry> library,
     required Set<String> activityChangedAppIds,
     bool force = false,
     Duration staleAfter = const Duration(hours: 24),
     int? maxGames,
-    void Function(int current, int total, String title)?
-        onProgress,
+    void Function(int current, int total, String title)? onProgress,
   }) async {
     final DateTime now = DateTime.now();
-    final List<GameLibraryEntry> linked = library
-        .where((game) {
-          final GamePlatformProfile? steam =
-              game.platformProfile(GamePlatform.steam);
-          return steam?.externalId?.trim().isNotEmpty == true;
-        })
-        .toList();
+    final List<GameLibraryEntry> linked = library.where((game) {
+      final GamePlatformProfile? steam = game.platformProfile(
+        GamePlatform.steam,
+      );
+      return steam?.externalId?.trim().isNotEmpty == true;
+    }).toList();
 
     final List<GameLibraryEntry> queue = <GameLibraryEntry>[];
     int skippedFresh = 0;
 
     for (final GameLibraryEntry game in linked) {
-      final GamePlatformProfile steam =
-          game.platformProfile(GamePlatform.steam)!;
+      final GamePlatformProfile steam = game.platformProfile(
+        GamePlatform.steam,
+      )!;
       final String appId = steam.externalId!.trim();
       final DateTime? lastSync = steam.achievementsLastSyncedAt;
 
       final bool neverSynced =
-          !steam.achievementCatalogInitialized ||
-              lastSync == null;
-      final bool activityChanged =
-          activityChangedAppIds.contains(appId);
+          !steam.achievementCatalogInitialized || lastSync == null;
+      final bool activityChanged = activityChangedAppIds.contains(appId);
       final bool stale =
-          lastSync == null ||
-              now.difference(lastSync) >= staleAfter;
+          lastSync == null || now.difference(lastSync) >= staleAfter;
 
       if (force || neverSynced || activityChanged || stale) {
         queue.add(game);
@@ -967,10 +851,12 @@ class SteamSyncService {
         return aChanged ? -1 : 1;
       }
 
-      final DateTime? aPlayed =
-          a.platformProfile(GamePlatform.steam)?.lastPlayedAt;
-      final DateTime? bPlayed =
-          b.platformProfile(GamePlatform.steam)?.lastPlayedAt;
+      final DateTime? aPlayed = a
+          .platformProfile(GamePlatform.steam)
+          ?.lastPlayedAt;
+      final DateTime? bPlayed = b
+          .platformProfile(GamePlatform.steam)
+          ?.lastPlayedAt;
       if (aPlayed == null && bPlayed == null) {
         return 0;
       }
@@ -983,9 +869,7 @@ class SteamSyncService {
       return bPlayed.compareTo(aPlayed);
     });
 
-    if (maxGames != null &&
-        maxGames > 0 &&
-        queue.length > maxGames) {
+    if (maxGames != null && maxGames > 0 && queue.length > maxGames) {
       final int deferred = queue.length - maxGames;
       queue.removeRange(maxGames, queue.length);
       skippedFresh += deferred;
@@ -999,25 +883,23 @@ class SteamSyncService {
 
     final List<SteamAchievementSyncIssue> issues =
         <SteamAchievementSyncIssue>[];
-    final List<GameLibraryEntry> workingLibrary =
-        List<GameLibraryEntry>.from(library);
-    final List<(
-      GameLibraryEntry,
-      GamePlatformProfile,
-      List<GameAchievementDetail>
-    )> announcements = <(
-      GameLibraryEntry,
-      GamePlatformProfile,
-      List<GameAchievementDetail>
-    )>[];
+    final List<GameLibraryEntry> workingLibrary = List<GameLibraryEntry>.from(
+      library,
+    );
+    final List<
+      (GameLibraryEntry, GamePlatformProfile, List<GameAchievementDetail>)
+    >
+    announcements =
+        <
+          (GameLibraryEntry, GamePlatformProfile, List<GameAchievementDetail>)
+        >[];
 
     for (int index = 0; index < queue.length; index += 1) {
       final GameLibraryEntry game = queue[index];
       onProgress?.call(index + 1, queue.length, game.title);
 
       try {
-        final SteamAchievementSyncResult result =
-            await syncAchievements(
+        final SteamAchievementSyncResult result = await syncAchievements(
           game,
           persist: false,
           announceNewUnlocks: false,
@@ -1034,10 +916,8 @@ class SteamSyncService {
 
         if (!result.firstDetailedSync &&
             result.newlyUnlockedDetails.isNotEmpty) {
-          final GamePlatformProfile? updatedSteam =
-              result.updatedEntry.platformProfile(
-            GamePlatform.steam,
-          );
+          final GamePlatformProfile? updatedSteam = result.updatedEntry
+              .platformProfile(GamePlatform.steam);
           if (updatedSteam != null) {
             announcements.add((
               game,
@@ -1047,8 +927,7 @@ class SteamSyncService {
           }
         }
 
-        if (result.summary.total <= 0 &&
-            result.achievements.isEmpty) {
+        if (result.summary.total <= 0 && result.achievements.isEmpty) {
           noAchievements += 1;
         }
       } on SteamSyncException {
@@ -1060,9 +939,7 @@ class SteamSyncService {
       // lorsque la première synchronisation doit parcourir une grosse
       // bibliothèque.
       if (index + 1 < queue.length) {
-        await Future<void>.delayed(
-          const Duration(milliseconds: 90),
-        );
+        await Future<void>.delayed(const Duration(milliseconds: 90));
       }
     }
 
@@ -1089,9 +966,7 @@ class SteamSyncService {
       unavailableGames: unavailable,
       newlyUnlocked: newlyUnlocked,
       totalAchievementsKnown: totalAchievementsKnown,
-      issues: List<SteamAchievementSyncIssue>.unmodifiable(
-        issues,
-      ),
+      issues: List<SteamAchievementSyncIssue>.unmodifiable(issues),
     );
   }
 
@@ -1101,8 +976,7 @@ class SteamSyncService {
     }
 
     final String message = raw?.toString() ?? '';
-    if (message.contains('404') ||
-        message.contains('Function not found')) {
+    if (message.contains('404') || message.contains('Function not found')) {
       return 'La fonction Steam n’est pas encore déployée dans Supabase. Suis le README V1.8 pour l’activer.';
     }
     if (message.contains('STEAM_WEB_API_KEY')) {
