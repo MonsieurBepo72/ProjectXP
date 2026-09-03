@@ -1,4 +1,4 @@
-import 'dart:async';
+﻿import 'dart:async';
 
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
@@ -12,6 +12,7 @@ import 'screens/intro_splash_screen.dart';
 import 'services/project_xp_communicator_ui_service.dart';
 import 'services/project_xp_startup_service.dart';
 import 'widgets/global_communicator_alert.dart';
+import 'widgets/global_gaming_sync_status.dart';
 import 'widgets/global_tap_feedback.dart';
 
 Future<void> main() async {
@@ -166,12 +167,14 @@ class ProjectXP extends StatelessWidget {
         BuildContext context,
         Widget? child,
       ) {
-        return GlobalCommunicatorAlert(
-          child:
-              GlobalTapFeedback(
+        return GlobalGamingSyncStatus(
+          child: GlobalCommunicatorAlert(
             child:
-                child ??
-                    const SizedBox.shrink(),
+                GlobalTapFeedback(
+              child:
+                  child ??
+                      const SizedBox.shrink(),
+            ),
           ),
         );
       },

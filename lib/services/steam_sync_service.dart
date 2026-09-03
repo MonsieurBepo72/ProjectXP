@@ -1,4 +1,4 @@
-import 'package:flutter/foundation.dart';
+﻿import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -35,6 +35,20 @@ class SteamLibrarySyncResult {
   });
 }
 
+class SteamAchievementSyncIssue {
+  final String gameId;
+  final String title;
+  final String appId;
+  final String message;
+
+  const SteamAchievementSyncIssue({
+    required this.gameId,
+    required this.title,
+    required this.appId,
+    required this.message,
+  });
+}
+
 class SteamAllAchievementSyncResult {
   final int linkedGames;
   final int checkedGames;
@@ -42,6 +56,8 @@ class SteamAllAchievementSyncResult {
   final int gamesWithoutAchievements;
   final int unavailableGames;
   final int newlyUnlocked;
+  final int totalAchievementsKnown;
+  final List<SteamAchievementSyncIssue> issues;
 
   const SteamAllAchievementSyncResult({
     required this.linkedGames,
@@ -50,7 +66,54 @@ class SteamAllAchievementSyncResult {
     required this.gamesWithoutAchievements,
     required this.unavailableGames,
     required this.newlyUnlocked,
+    required this.totalAchievementsKnown,
+    required this.issues,
   });
+}
+
+class SteamFullSyncResult {
+  final SteamLibrarySyncResult library;
+  final SteamAllAchievementSyncResult achievements;
+
+  const SteamFullSyncResult({
+    required this.library,
+    required this.achievements,
+  });
+}
+
+enum SteamSyncPhase {
+  idle,
+  library,
+  achievements,
+  completed,
+  failed,
+}
+
+class SteamSyncUiState {
+  final SteamSyncPhase phase;
+  final String label;
+  final int current;
+  final int total;
+  final String? message;
+
+  const SteamSyncUiState({
+    required this.phase,
+    required this.label,
+    this.current = 0,
+    this.total = 0,
+    this.message,
+  });
+
+  const SteamSyncUiState.idle()
+      : phase = SteamSyncPhase.idle,
+        label = '',
+        current = 0,
+        total = 0,
+        message = null;
+
+  bool get running =>
+      phase == SteamSyncPhase.library ||
+      phase == SteamSyncPhase.achievements;
 }
 
 class SteamAchievementSyncResult {
@@ -74,11 +137,16 @@ class SteamAchievementSyncResult {
 class SteamSyncService {
   SteamSyncService._();
 
-  static bool _startupSyncRunning = false;
+  static Future<SteamFullSyncResult>? _activeSync;
   static String? _cachedOfficialSteamId;
 
-  static bool get backgroundSyncRunning => _startupSyncRunning;
+  static final ValueNotifier<SteamSyncUiState> syncState =
+      ValueNotifier<SteamSyncUiState>(
+    const SteamSyncUiState.idle(),
+  );
 
+  static bool get backgroundSyncRunning =>
+      _activeSync != null;
   static const String _steamRefPrefix =
       'project_xp_steam_reference_';
   static const String _steamIdPrefix =
@@ -225,37 +293,171 @@ class SteamSyncService {
   /// démarrage afin de garder l'application fluide ; le bouton SYNCHRONISER
   /// TOUT force, lui, la totalité de la bibliothèque.
   static Future<void> syncAtStartup() async {
-    if (_startupSyncRunning) {
-      return;
-    }
-
     final String reference =
         (await getSyncReference() ?? '').trim();
+
     if (reference.isEmpty) {
       return;
     }
 
-    _startupSyncRunning = true;
+    try {
+      await syncEverything(
+        force: false,
+        maxGames: 24,
+        staleAfter: const Duration(hours: 8),
+      );
+    } on SteamSyncException catch (error) {
+      debugPrint(
+        'Sync Steam dÃ©marrage ignorÃ©e : ${error.message}',
+      );
+    } catch (error) {
+      debugPrint(
+        'Sync Steam dÃ©marrage ignorÃ©e : $error',
+      );
+    }
+  }
+
+  static Future<SteamFullSyncResult> syncEverything({
+    bool force = false,
+    int? maxGames,
+    Duration staleAfter = const Duration(hours: 24),
+  }) {
+    final Future<SteamFullSyncResult>? active =
+        _activeSync;
+
+    if (active != null) {
+      return active;
+    }
+
+    final Future<SteamFullSyncResult> future =
+        _runFullSync(
+      force: force,
+      maxGames: maxGames,
+      staleAfter: staleAfter,
+    );
+
+    _activeSync = future;
+    return future;
+  }
+
+  static Future<SteamFullSyncResult> _runFullSync({
+    required bool force,
+    required int? maxGames,
+    required Duration staleAfter,
+  }) async {
+    final String reference =
+        (await getSyncReference() ?? '').trim();
+
+    if (reference.isEmpty) {
+      throw const SteamSyncException(
+        'Lie dâ€™abord ton compte Steam depuis COMPTES.',
+      );
+    }
+
+    syncState.value = const SteamSyncUiState(
+      phase: SteamSyncPhase.library,
+      label: 'Synchronisation Steam â€¢ BibliothÃ¨queâ€¦',
+    );
+
     try {
       final SteamLibrarySyncResult libraryResult =
           await syncLibrary(reference);
 
       final List<GameLibraryEntry> library =
-          await GameLibraryService.loadCurrentLibraryConsolidated();
+          await GameLibraryService
+              .loadCurrentLibraryConsolidated();
 
-      await syncAllAchievements(
+      syncState.value = const SteamSyncUiState(
+        phase: SteamSyncPhase.achievements,
+        label: 'Synchronisation Steam â€¢ SuccÃ¨sâ€¦',
+      );
+
+      final SteamAllAchievementSyncResult achievementResult =
+          await syncAllAchievements(
         library: library,
         activityChangedAppIds:
             libraryResult.activityChangedAppIds,
-        staleAfter: const Duration(hours: 8),
-        maxGames: 24,
+        force: force,
+        staleAfter: staleAfter,
+        maxGames: maxGames,
+        onProgress: (
+          int current,
+          int total,
+          String title,
+        ) {
+          syncState.value = SteamSyncUiState(
+            phase: SteamSyncPhase.achievements,
+            label: total <= 0
+                ? 'SuccÃ¨s Steam Ã  jour'
+                : 'SuccÃ¨s $current / $total â€¢ $title',
+            current: current,
+            total: total,
+          );
+        },
+      );
+
+      final List<String> details = <String>[
+        '${libraryResult.detected} jeux',
+        '${achievementResult.checkedGames} jeux vÃ©rifiÃ©s',
+        if (achievementResult.totalAchievementsKnown > 0)
+          '${achievementResult.totalAchievementsKnown} succÃ¨s connus',
+        if (achievementResult.gamesWithoutAchievements > 0)
+          '${achievementResult.gamesWithoutAchievements} sans succÃ¨s',
+        if (achievementResult.unavailableGames > 0)
+          '${achievementResult.unavailableGames} Ã  revoir',
+        if (achievementResult.newlyUnlocked > 0)
+          '${achievementResult.newlyUnlocked} nouveaux succÃ¨s',
+      ];
+
+      String message =
+          'Synchronisation terminÃ©e â€¢ ${details.join(' â€¢ ')}.';
+
+      if (achievementResult.issues.isNotEmpty) {
+        final SteamAchievementSyncIssue first =
+            achievementResult.issues.first;
+
+        message +=
+            ' Exemple : ${first.title} â€” ${first.message}';
+      }
+
+      if (libraryResult.warning?.trim().isNotEmpty == true) {
+        message += ' ${libraryResult.warning!.trim()}';
+      }
+
+      syncState.value = SteamSyncUiState(
+        phase: SteamSyncPhase.completed,
+        label: 'Synchronisation terminÃ©e',
+        message: message,
+      );
+
+      return SteamFullSyncResult(
+        library: libraryResult,
+        achievements: achievementResult,
       );
     } on SteamSyncException catch (error) {
-      debugPrint('Sync Steam démarrage ignorée : ${error.message}');
+      syncState.value = SteamSyncUiState(
+        phase: SteamSyncPhase.failed,
+        label: 'Synchronisation Ã©chouÃ©e',
+        message:
+            'Synchronisation Ã©chouÃ©e â€¢ ${error.message}',
+      );
+      rethrow;
     } catch (error) {
-      debugPrint('Sync Steam démarrage ignorée : $error');
+      final SteamSyncException wrapped =
+          SteamSyncException(
+        _friendlyFunctionError(error.toString()),
+      );
+
+      syncState.value = SteamSyncUiState(
+        phase: SteamSyncPhase.failed,
+        label: 'Synchronisation Ã©chouÃ©e',
+        message:
+            'Synchronisation Ã©chouÃ©e â€¢ ${wrapped.message}',
+      );
+
+      throw wrapped;
     } finally {
-      _startupSyncRunning = false;
+      _activeSync = null;
     }
   }
 
@@ -793,7 +995,10 @@ class SteamSyncService {
     int noAchievements = 0;
     int unavailable = 0;
     int newlyUnlocked = 0;
+    int totalAchievementsKnown = 0;
 
+    final List<SteamAchievementSyncIssue> issues =
+        <SteamAchievementSyncIssue>[];
     final List<GameLibraryEntry> workingLibrary =
         List<GameLibraryEntry>.from(library);
     final List<(
@@ -883,6 +1088,10 @@ class SteamSyncService {
       gamesWithoutAchievements: noAchievements,
       unavailableGames: unavailable,
       newlyUnlocked: newlyUnlocked,
+      totalAchievementsKnown: totalAchievementsKnown,
+      issues: List<SteamAchievementSyncIssue>.unmodifiable(
+        issues,
+      ),
     );
   }
 

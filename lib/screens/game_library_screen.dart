@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 
 import '../models/game_library_entry.dart';
 import '../services/game_catalog_service.dart';
@@ -69,6 +69,7 @@ class _GameLibraryScreenState extends State<GameLibraryScreen> {
   bool _loading = true;
   bool _steamBusy = false;
   String? _steamProgressLabel;
+  SteamSyncPhase? _lastSteamSyncPhase;
   bool _catalogBusy = false;
   List<GameLibraryEntry> _games = <GameLibraryEntry>[];
   GameStatus? _statusFilter;
@@ -81,13 +82,52 @@ class _GameLibraryScreenState extends State<GameLibraryScreen> {
   @override
   void initState() {
     super.initState();
+
+    SteamSyncService.syncState.addListener(
+      _handleSteamSyncState,
+    );
+
+    _handleSteamSyncState();
     _load();
   }
 
   @override
   void dispose() {
+    SteamSyncService.syncState.removeListener(
+      _handleSteamSyncState,
+    );
+
     _searchController.dispose();
     super.dispose();
+  }
+
+  void _handleSteamSyncState() {
+    if (!mounted) {
+      return;
+    }
+
+    final SteamSyncUiState state =
+        SteamSyncService.syncState.value;
+
+    final SteamSyncPhase? previous =
+        _lastSteamSyncPhase;
+
+    _lastSteamSyncPhase = state.phase;
+
+    setState(() {
+      _steamBusy = state.running;
+      _steamProgressLabel =
+          state.running ? state.label : null;
+    });
+
+    final bool justFinished =
+        (state.phase == SteamSyncPhase.completed ||
+            state.phase == SteamSyncPhase.failed) &&
+        previous != state.phase;
+
+    if (justFinished) {
+      _load();
+    }
   }
 
   Future<void> _load() async {
@@ -258,104 +298,36 @@ class _GameLibraryScreenState extends State<GameLibraryScreen> {
   }
 
   Future<void> _syncAllSteam() async {
-    if (_steamBusy) {
-      return;
-    }
-
-    if (SteamSyncService.backgroundSyncRunning) {
-      _message(
-        'La synchro automatique du démarrage est déjà en cours. '
-        'Project XP continue en arrière-plan sans ralentir la Bibliothèque.',
-      );
-      return;
-    }
-
     FocusManager.instance.primaryFocus?.unfocus();
 
     final bool hasIdentity =
         await SteamSyncService.hasSyncIdentity();
+
     if (!mounted) {
       return;
     }
 
     if (!hasIdentity) {
-      _message('Lie d’abord une plateforme depuis COMPTES.');
+      _message(
+        'Lie d’abord une plateforme depuis COMPTES.',
+      );
       await _openAccounts();
       return;
     }
 
-    setState(() {
-      _steamBusy = true;
-      _steamProgressLabel = 'Bibliothèque Steam…';
-    });
-
     try {
-      final SteamLibrarySyncResult libraryResult =
-          await SteamSyncService.syncLibraryForLinkedAccount();
-
-      final List<GameLibraryEntry> refreshedLibrary =
-          await GameLibraryService.loadCurrentLibraryConsolidated();
-      if (!mounted) {
-        return;
-      }
-
-      setState(() {
-        _games = refreshedLibrary;
-        _steamProgressLabel = 'Succès Steam…';
-      });
-
-      final SteamAllAchievementSyncResult achievementResult =
-          await SteamSyncService.syncAllAchievements(
-        library: refreshedLibrary,
-        activityChangedAppIds:
-            libraryResult.activityChangedAppIds,
+      // Le Future appartient désormais au service global :
+      // quitter cet écran n'interrompt jamais la synchronisation.
+      await SteamSyncService.syncEverything(
         force: true,
-        onProgress: (current, total, title) {
-          if (!mounted) {
-            return;
-          }
-          setState(() {
-            _steamProgressLabel = total == 0
-                ? 'Succès à jour'
-                : 'Succès $current / $total • $title';
-          });
-        },
       );
 
-      await _load();
-      if (!mounted) {
-        return;
+      if (mounted) {
+        await _load();
       }
-
-      final List<String> details = <String>[
-        '${libraryResult.detected} jeux',
-        '${achievementResult.checkedGames} succès vérifiés',
-        if (achievementResult.gamesWithoutAchievements > 0)
-          '${achievementResult.gamesWithoutAchievements} sans succès',
-        if (achievementResult.unavailableGames > 0)
-          '${achievementResult.unavailableGames} non renseignés par Steam',
-        if (achievementResult.newlyUnlocked > 0)
-          '${achievementResult.newlyUnlocked} nouveaux succès',
-      ];
-
-      final String baseMessage =
-          'Synchronisation terminée • ${details.join(' • ')}.';
-      _message(
-        libraryResult.warning == null ||
-                libraryResult.warning!.isEmpty
-            ? baseMessage
-            : '$baseMessage ${libraryResult.warning}',
-      );
     } on SteamSyncException catch (error) {
       if (mounted) {
         _message(error.message);
-      }
-    } finally {
-      if (mounted) {
-        setState(() {
-          _steamBusy = false;
-          _steamProgressLabel = null;
-        });
       }
     }
   }
