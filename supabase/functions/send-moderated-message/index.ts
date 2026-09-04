@@ -18,10 +18,18 @@ const OPENAI_MODERATION_URL =
 const OPENAI_MODERATION_MODEL =
   'omni-moderation-latest';
 
+// OpenAI reste un module optionnel.
+// Tant que la variable n'est pas explicitement positionnee a "true",
+// aucun appel reseau OpenAI n'est effectue.
+const OPENAI_MODERATION_ENABLED =
+  (Deno.env.get('OPENAI_MODERATION_ENABLED') ?? 'false')
+    .trim()
+    .toLowerCase() === 'true';
+
 const MAX_CONTENT_LENGTH = 2000;
 
 const MODERATION_PIPELINE_VERSION =
-  '2.4.6.2';
+  '2.4.7';
 
 const BUNDLED_PROFANITY_LANGUAGES =
   new Set<string>([
@@ -93,6 +101,28 @@ const SAFETY_SIGNAL_CATEGORIES = new Set<string>([
 
 const NON_SEGMENTED_SCRIPT =
   /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Thai}\p{Script=Khmer}\p{Script=Lao}\p{Script=Myanmar}]/u;
+
+const SHORT_LANGUAGE_HINTS:
+  Record<string, string> = {
+  hi: 'en',
+  hello: 'en',
+  thanks: 'en',
+  thx: 'en',
+  bye: 'en',
+  bonjour: 'fr',
+  bonsoir: 'fr',
+  salut: 'fr',
+  coucou: 'fr',
+  merci: 'fr',
+  hola: 'es',
+  gracias: 'es',
+  ciao: 'it',
+  grazie: 'it',
+  'olá': 'pt',
+  obrigado: 'pt',
+  obrigada: 'pt',
+  danke: 'de',
+};
 
 const FRANC_TO_PROJECT_LANGUAGE:
   Record<string, string> = {
@@ -549,23 +579,13 @@ Deno.serve(async (req: Request) => {
     );
 
   // ---------------------------------------------------------------------------
-  // V2.4 : OpenAI Moderation est temporairement sorti du chemin critique.
-  //
-  // Nos tests réels renvoient HTTP 429 et ajoutent près d'une seconde avant
-  // chaque envoi. On garde la fonction dans le fichier pour pouvoir la
-  // réactiver plus tard lorsque le quota/API sera réglé, mais elle n'est plus
-  // appelée lors de l'envoi.
+  // V2.4.7 : OpenAI Moderation reste disponible comme module optionnel.
+  // Aucun appel n'est effectué tant que OPENAI_MODERATION_ENABLED n'est pas true.
   // ---------------------------------------------------------------------------
 
   const moderationPromise =
-    Promise.resolve<ModerationDecision>(
-      {
-        blocked: false,
-        safetySignal: false,
-        categories: [],
-        categoryScores: {},
-        degraded: true,
-      },
+    moderateWithOpenAI(
+      content,
     );
 
   const bundledProfanitySignal =
@@ -2784,11 +2804,58 @@ function detectProjectLanguages(
     // La modération reste fonctionnelle même si la détection échoue.
   }
 
+  // -------------------------------------------------------------------------
+  // Fallback conservateur pour quelques messages très courts et non ambigus.
+  // On ne devine jamais une langue pour des termes universels comme "gg",
+  // "ok" ou "yo" : ils restent volontairement "unknown".
+  // -------------------------------------------------------------------------
+
+  if (detected.size === 0) {
+    const shortHint =
+      detectShortLanguageHint(
+        content,
+      );
+
+    if (shortHint != null) {
+      detected.add(
+        shortHint,
+      );
+    }
+  }
+
   return [
     ...detected,
   ].slice(
     0,
     MAX_DETECTED_LANGUAGES,
+  );
+}
+
+function detectShortLanguageHint(
+  content: string,
+): string | null {
+  const normalized =
+    content
+      .normalize('NFKC')
+      .toLowerCase()
+      .replace(
+        /[\p{P}\p{S}]+/gu,
+        ' ',
+      )
+      .replace(
+        /\s+/gu,
+        ' ',
+      )
+      .trim();
+
+  if (normalized.length === 0) {
+    return null;
+  }
+
+  return (
+    SHORT_LANGUAGE_HINTS[
+      normalized
+    ] ?? null
   );
 }
 
@@ -3004,6 +3071,16 @@ function normalizeBasicLeet(
 async function moderateWithOpenAI(
   content: string,
 ): Promise<ModerationDecision> {
+  if (!OPENAI_MODERATION_ENABLED) {
+    return {
+      blocked: false,
+      safetySignal: false,
+      categories: [],
+      categoryScores: {},
+      degraded: false,
+    };
+  }
+
   const apiKey =
     Deno.env.get(
       'OPENAI_API_KEY',
