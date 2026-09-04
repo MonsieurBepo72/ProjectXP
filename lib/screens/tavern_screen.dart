@@ -1067,6 +1067,18 @@ class _TavernScreenState extends State<TavernScreen> {
       );
     }
 
+    if (result.rateLimited) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Tu envoies des messages trop rapidement. Réessaie dans quelques secondes.',
+          ),
+        ),
+      );
+
+      return;
+    }
+
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
         content: Text(

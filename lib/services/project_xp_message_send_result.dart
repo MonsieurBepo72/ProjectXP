@@ -1,6 +1,7 @@
 enum ProjectXpMessageSendStatus {
   sent,
   blocked,
+  rateLimited,
   error,
 }
 
@@ -17,6 +18,9 @@ class ProjectXpMessageSendResult {
   bool get blocked =>
       status == ProjectXpMessageSendStatus.blocked;
 
+  bool get rateLimited =>
+      status == ProjectXpMessageSendStatus.rateLimited;
+
   bool get failed =>
       status == ProjectXpMessageSendStatus.error;
 
@@ -28,6 +32,11 @@ class ProjectXpMessageSendResult {
   static const ProjectXpMessageSendResult denied =
       ProjectXpMessageSendResult._(
     ProjectXpMessageSendStatus.blocked,
+  );
+
+  static const ProjectXpMessageSendResult rateLimit =
+      ProjectXpMessageSendResult._(
+    ProjectXpMessageSendStatus.rateLimited,
   );
 
   static const ProjectXpMessageSendResult failure =

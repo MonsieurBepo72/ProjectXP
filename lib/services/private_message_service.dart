@@ -1,3 +1,5 @@
+import 'package:supabase_flutter/supabase_flutter.dart';
+
 import 'content_moderation_service.dart';
 import 'project_xp_message_send_result.dart';
 import 'supabase_service.dart';
@@ -217,9 +219,18 @@ class PrivateMessageService {
         case 'blocked':
           return ProjectXpMessageSendResult.denied;
 
+        case 'rate_limited':
+          return ProjectXpMessageSendResult.rateLimit;
+
         default:
           return ProjectXpMessageSendResult.failure;
       }
+    } on FunctionException catch (error) {
+      if (error.status == 429) {
+        return ProjectXpMessageSendResult.rateLimit;
+      }
+
+      return ProjectXpMessageSendResult.failure;
     } catch (_) {
       return ProjectXpMessageSendResult.failure;
     }

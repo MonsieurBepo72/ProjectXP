@@ -198,9 +198,18 @@ class TavernService {
         case 'blocked':
           return ProjectXpMessageSendResult.denied;
 
+        case 'rate_limited':
+          return ProjectXpMessageSendResult.rateLimit;
+
         default:
           return ProjectXpMessageSendResult.failure;
       }
+    } on FunctionException catch (error) {
+      if (error.status == 429) {
+        return ProjectXpMessageSendResult.rateLimit;
+      }
+
+      return ProjectXpMessageSendResult.failure;
     } catch (_) {
       return ProjectXpMessageSendResult.failure;
     }

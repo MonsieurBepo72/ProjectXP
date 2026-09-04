@@ -29,7 +29,7 @@ const OPENAI_MODERATION_ENABLED =
 const MAX_CONTENT_LENGTH = 2000;
 
 const MODERATION_PIPELINE_VERSION =
-  '2.4.7';
+  '2.4.8';
 
 const BUNDLED_PROFANITY_LANGUAGES =
   new Set<string>([
@@ -240,6 +240,14 @@ type ModernSlangSignal = {
     | 'modern_slang_obfuscated'
     | 'self_harm_directive'
     | 'none';
+};
+
+type MessageRateLimitDecision = {
+  allowed: boolean;
+  retryAfterSeconds: number;
+  scope: string;
+  burstRemaining: number;
+  minuteRemaining: number;
 };
 
 const MODERN_DIRECTED_TERMS =
@@ -561,6 +569,46 @@ Deno.serve(async (req: Request) => {
   }
 
   // ---------------------------------------------------------------------------
+  // V2.4.8 : anti-spam serveur.
+  //
+  // Le quota est consommé avant les contrôles de modération coûteux afin
+  // qu'un client compromis ne puisse pas contourner la protection locale.
+  // Le RPC est atomique côté PostgreSQL et séparé entre Taverne et privé.
+  // ---------------------------------------------------------------------------
+
+  const rateLimit =
+    await consumeMessageRateLimit(
+      adminClient,
+      user.id,
+      surface,
+    );
+
+  if (rateLimit == null) {
+    return jsonResponse(
+      {
+        status: 'error',
+        code: 'rate_limit_unavailable',
+      },
+      503,
+    );
+  }
+
+  if (!rateLimit.allowed) {
+    console.warn(
+      `[Project XP ${MODERATION_PIPELINE_VERSION}] ` +
+      `rate_limited=true ` +
+      `surface=${surface} ` +
+      `scope=${rateLimit.scope} ` +
+      `retry_after=${rateLimit.retryAfterSeconds}`,
+    );
+
+    return rateLimitedResponse(
+      rateLimit.retryAfterSeconds,
+      rateLimit.scope,
+    );
+  }
+
+  // ---------------------------------------------------------------------------
   // V2.2 : les quatre contrôles indépendants partent en parallèle.
   // ---------------------------------------------------------------------------
 
@@ -872,6 +920,135 @@ Deno.serve(async (req: Request) => {
     200,
   );
 });
+
+async function consumeMessageRateLimit(
+  adminClient:
+    ReturnType<typeof createClient>,
+  userId: string,
+  surface: string,
+): Promise<MessageRateLimitDecision | null> {
+  try {
+    const {
+      data,
+      error,
+    } =
+      await adminClient.rpc(
+        'project_xp_consume_message_rate_limit',
+        {
+          p_user_id:
+            userId,
+          p_surface:
+            surface,
+        },
+      );
+
+    if (error != null) {
+      console.error(
+        'Rate limit serveur indisponible :',
+        error.message,
+      );
+
+      return null;
+    }
+
+    const raw =
+      Array.isArray(data)
+        ? data[0]
+        : data;
+
+    if (
+      raw == null ||
+      typeof raw !== 'object'
+    ) {
+      console.error(
+        'Réponse rate limit serveur invalide.',
+      );
+
+      return null;
+    }
+
+    const row =
+      raw as Record<string, unknown>;
+
+    if (
+      row.allowed !== true &&
+      row.allowed !== false
+    ) {
+      console.error(
+        'Décision rate limit serveur invalide.',
+      );
+
+      return null;
+    }
+
+    const retryAfterRaw =
+      Number(
+        row.retry_after_seconds ??
+        0,
+      );
+
+    const burstRemainingRaw =
+      Number(
+        row.burst_remaining ??
+        0,
+      );
+
+    const minuteRemainingRaw =
+      Number(
+        row.minute_remaining ??
+        0,
+      );
+
+    return {
+      allowed:
+        row.allowed,
+      retryAfterSeconds:
+        Number.isFinite(
+            retryAfterRaw,
+          )
+          ? Math.max(
+              0,
+              Math.ceil(
+                retryAfterRaw,
+              ),
+            )
+          : 0,
+      scope:
+        cleanString(
+          row.limit_scope,
+        ) || 'unknown',
+      burstRemaining:
+        Number.isFinite(
+            burstRemainingRaw,
+          )
+          ? Math.max(
+              0,
+              Math.floor(
+                burstRemainingRaw,
+              ),
+            )
+          : 0,
+      minuteRemaining:
+        Number.isFinite(
+            minuteRemainingRaw,
+          )
+          ? Math.max(
+              0,
+              Math.floor(
+                minuteRemainingRaw,
+              ),
+            )
+          : 0,
+    };
+  } catch (error) {
+    console.error(
+      'Contrôle rate limit impossible :',
+      error,
+    );
+
+    return null;
+  }
+}
 
 async function resolveBlockingDecision(
   adminClient:
@@ -3365,6 +3542,42 @@ async function sha256(
           ),
     )
     .join('');
+}
+
+function rateLimitedResponse(
+  retryAfterSeconds: number,
+  scope: string,
+): Response {
+  const safeRetry =
+    Math.max(
+      1,
+      Math.ceil(
+        retryAfterSeconds,
+      ),
+    );
+
+  return new Response(
+    JSON.stringify(
+      {
+        status: 'error',
+        code: 'rate_limited',
+        retry_after_seconds:
+          safeRetry,
+        limit_scope:
+          scope,
+        moderation_pipeline:
+          MODERATION_PIPELINE_VERSION,
+      },
+    ),
+    {
+      status: 429,
+      headers: {
+        ...corsHeaders,
+        'Retry-After':
+          safeRetry.toString(),
+      },
+    },
+  );
 }
 
 function blockedResponse():
