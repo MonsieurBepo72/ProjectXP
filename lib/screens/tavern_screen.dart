@@ -981,6 +981,8 @@ class _TavernScreenState extends State<TavernScreen> {
       return;
     }
 
+    FocusManager.instance.primaryFocus?.unfocus();
+
     final ContentModerationResult moderation =
         ContentModerationService.checkTextImmediate(
       content,

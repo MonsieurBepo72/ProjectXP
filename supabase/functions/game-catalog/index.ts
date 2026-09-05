@@ -1,4 +1,5 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts'
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.57.4'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -7,6 +8,11 @@ const corsHeaders = {
 }
 
 type JsonRecord = Record<string, unknown>
+
+type RateLimitResult = {
+  allowed: boolean
+  resetAt: string
+}
 
 let cachedToken = ''
 let cachedTokenExpiresAt = 0
@@ -19,6 +25,114 @@ function jsonResponse(body: JsonRecord, status = 200) {
       'Content-Type': 'application/json; charset=utf-8',
     },
   })
+}
+
+function env(name: string) {
+  return Deno.env.get(name)?.trim() ?? ''
+}
+
+function getSupabaseAdminKey() {
+  const legacyKey = env('SUPABASE_SERVICE_ROLE_KEY')
+  if (legacyKey) {
+    return legacyKey
+  }
+
+  const rawSecretKeys = env('SUPABASE_SECRET_KEYS')
+  if (!rawSecretKeys) {
+    throw new Error('Clé serveur Supabase introuvable.')
+  }
+
+  const parsed = JSON.parse(rawSecretKeys) as Record<string, string>
+  const preferred = String(parsed.default ?? '').trim()
+  if (preferred) {
+    return preferred
+  }
+
+  const fallback = Object.values(parsed)
+    .map((value) => String(value ?? '').trim())
+    .find((value) => value.length > 0)
+
+  if (!fallback) {
+    throw new Error('Aucune clé serveur Supabase utilisable.')
+  }
+  return fallback
+}
+
+function serviceClient() {
+  const url = env('SUPABASE_URL')
+  if (!url) {
+    throw new Error('SUPABASE_URL introuvable.')
+  }
+
+  return createClient(url, getSupabaseAdminKey(), {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false,
+    },
+  })
+}
+
+async function authenticatedUser(request: Request) {
+  const authorization = request.headers.get('Authorization') ?? ''
+  const token = authorization.startsWith('Bearer ')
+    ? authorization.substring(7).trim()
+    : ''
+
+  if (!token) {
+    return null
+  }
+
+  const client = serviceClient()
+  const { data, error } = await client.auth.getUser(token)
+  if (error || !data.user) {
+    return null
+  }
+
+  // Les sessions anonymes sont compatibles avec l'architecture actuelle.
+  return data.user
+}
+
+async function consumeRateLimit(
+  scope: string,
+  subject: string,
+  limit: number,
+  windowSeconds: number,
+): Promise<RateLimitResult> {
+  try {
+    const client = serviceClient()
+    const { data, error } = await client.rpc(
+      'project_xp_consume_edge_rate_limit',
+      {
+        p_scope: scope,
+        p_subject: subject,
+        p_limit: limit,
+        p_window_seconds: windowSeconds,
+      },
+    )
+
+    if (error) {
+      console.warn(
+        'Garde-fou de quota catalogue indisponible ; exécution conservée.',
+      )
+      return { allowed: true, resetAt: '' }
+    }
+
+    const row = Array.isArray(data) ? data[0] : data
+    if (!row || typeof row !== 'object') {
+      return { allowed: true, resetAt: '' }
+    }
+
+    const record = row as JsonRecord
+    return {
+      allowed: record.allowed === true,
+      resetAt: String(record.reset_at ?? ''),
+    }
+  } catch (_) {
+    console.warn(
+      'Garde-fou de quota catalogue indisponible ; exécution conservée.',
+    )
+    return { allowed: true, resetAt: '' }
+  }
 }
 
 function asRecord(value: unknown): JsonRecord | null {
@@ -237,37 +351,81 @@ serve(async (request) => {
     )
   }
 
-  const clientId =
-    Deno.env.get('IGDB_CLIENT_ID')?.trim() ?? ''
-  const clientSecret =
-    Deno.env.get('IGDB_CLIENT_SECRET')?.trim() ?? ''
-
-  if (!clientId || !clientSecret) {
-    return jsonResponse(
-      {
-        ok: false,
-        error:
-          'IGDB_CLIENT_ID / IGDB_CLIENT_SECRET ne sont pas configurés dans Supabase.',
-      },
-      503,
-    )
-  }
-
   try {
-    const body = (await request.json()) as JsonRecord
-    const action = String(body.action ?? '')
-
-    if (action === 'search') {
-      return await searchGames(
-        body,
-        clientId,
-        clientSecret,
+    const user = await authenticatedUser(request)
+    if (!user) {
+      return jsonResponse(
+        { ok: false, error: 'Session Project XP invalide.' },
+        401,
       )
     }
 
-    return jsonResponse(
-      { ok: false, error: 'Action catalogue inconnue.' },
-      400,
+    const body = (await request.json()) as JsonRecord
+    const action = String(body.action ?? '')
+
+    if (action !== 'search') {
+      return jsonResponse(
+        { ok: false, error: 'Action catalogue inconnue.' },
+        400,
+      )
+    }
+
+    const userRateLimit = await consumeRateLimit(
+      'game-catalog.search.user',
+      user.id,
+      30,
+      60,
+    )
+    if (!userRateLimit.allowed) {
+      return jsonResponse(
+        {
+          ok: false,
+          error:
+            'Trop de recherches de jeux. Réessaie dans quelques instants.',
+          retryAfter: userRateLimit.resetAt,
+        },
+        429,
+      )
+    }
+
+    // IGDB applique son propre quota au niveau de l'application. Ce second
+    // compteur protège donc la clé Project XP, pas seulement un utilisateur.
+    const providerRateLimit = await consumeRateLimit(
+      'game-catalog.search.provider',
+      'igdb',
+      8,
+      2,
+    )
+    if (!providerRateLimit.allowed) {
+      return jsonResponse(
+        {
+          ok: false,
+          error:
+            'Le catalogue est très sollicité. Réessaie dans un instant.',
+          retryAfter: providerRateLimit.resetAt,
+        },
+        429,
+      )
+    }
+
+    const clientId = env('IGDB_CLIENT_ID')
+    const clientSecret = env('IGDB_CLIENT_SECRET')
+
+    if (!clientId || !clientSecret) {
+      return jsonResponse(
+        {
+          ok: false,
+          error:
+            'IGDB_CLIENT_ID / IGDB_CLIENT_SECRET ne sont pas configurés dans Supabase.',
+        },
+        503,
+      )
+    }
+
+    return await searchGames(
+      body,
+      clientId,
+      clientSecret,
     )
   } catch (error) {
     const message =

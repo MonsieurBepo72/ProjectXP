@@ -1,0 +1,31 @@
+# Project XP — configuration Supabase versionnée.
+#
+# `project_id` identifie uniquement le projet local Supabase CLI.
+# Le project-ref distant reste géré par `supabase link` / --project-ref.
+project_id = "project-xp"
+
+# Appels directs depuis l'application Flutter : JWT utilisateur obligatoire.
+[functions.game-catalog]
+verify_jwt = true
+
+[functions.send-moderated-message]
+verify_jwt = true
+
+[functions.steam-sync]
+verify_jwt = true
+
+# Cette fonction reçoit le callback OpenID Steam depuis le navigateur.
+# Le démarrage du flux vérifie déjà le Bearer token dans le code et le callback
+# est validé côté serveur contre Steam + le flow temporaire stocké en base.
+[functions.platform-auth]
+verify_jwt = false
+
+# Import administratif one-shot protégé dans le code par
+# MODERATION_IMPORT_SECRET / x-project-xp-import-secret.
+[functions.import-moderation-lexicon]
+verify_jwt = false
+
+# Appelée par un Database Webhook Supabase, pas par un utilisateur Flutter.
+# Le code vérifie actuellement l'API key serveur reçue dans la requête.
+[functions.send-private-message-notification]
+verify_jwt = false

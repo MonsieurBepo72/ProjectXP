@@ -3,6 +3,10 @@
     <!-- Project XP doit rester installable sur les téléphones qui ne possèdent
          pas ces fonctions : les fonctionnalités matérielles sont optionnelles. -->
 
+    <!-- Requis explicitement par Project XP en build release pour Supabase,
+         Firebase/FCM et les services réseau externes. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.VIBRATE" />
@@ -18,7 +22,10 @@
     <application
         android:label="project_xp"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false"
+        android:fullBackupContent="@xml/backup_rules"
+        android:dataExtractionRules="@xml/data_extraction_rules">
 
         <activity
             android:name=".MainActivity"

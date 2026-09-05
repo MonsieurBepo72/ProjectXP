@@ -1,4 +1,5 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts'
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.57.4'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -8,6 +9,13 @@ const corsHeaders = {
 
 type JsonRecord = Record<string, unknown>
 
+type RateLimitResult = {
+  allowed: boolean
+  remaining: number
+  resetAt: string
+  degraded: boolean
+}
+
 function jsonResponse(body: JsonRecord, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -16,6 +24,133 @@ function jsonResponse(body: JsonRecord, status = 200) {
       'Content-Type': 'application/json; charset=utf-8',
     },
   })
+}
+
+function env(name: string) {
+  return Deno.env.get(name)?.trim() ?? ''
+}
+
+function getSupabaseAdminKey() {
+  const legacyKey = env('SUPABASE_SERVICE_ROLE_KEY')
+  if (legacyKey) {
+    return legacyKey
+  }
+
+  const rawSecretKeys = env('SUPABASE_SECRET_KEYS')
+  if (!rawSecretKeys) {
+    throw new Error('Clé serveur Supabase introuvable.')
+  }
+
+  const parsed = JSON.parse(rawSecretKeys) as Record<string, string>
+  const preferred = String(parsed.default ?? '').trim()
+  if (preferred) {
+    return preferred
+  }
+
+  const fallback = Object.values(parsed)
+    .map((value) => String(value ?? '').trim())
+    .find((value) => value.length > 0)
+
+  if (!fallback) {
+    throw new Error('Aucune clé serveur Supabase utilisable.')
+  }
+  return fallback
+}
+
+function serviceClient() {
+  const url = env('SUPABASE_URL')
+  if (!url) {
+    throw new Error('SUPABASE_URL introuvable.')
+  }
+
+  return createClient(url, getSupabaseAdminKey(), {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false,
+    },
+  })
+}
+
+async function authenticatedUser(request: Request) {
+  const authorization = request.headers.get('Authorization') ?? ''
+  const token = authorization.startsWith('Bearer ')
+    ? authorization.substring(7).trim()
+    : ''
+
+  if (!token) {
+    return null
+  }
+
+  const client = serviceClient()
+  const { data, error } = await client.auth.getUser(token)
+  if (error || !data.user) {
+    return null
+  }
+
+  // Les sessions anonymes Supabase restent volontairement autorisées :
+  // Project XP les utilise déjà pour sa couche sociale et Steam fonctionne
+  // aujourd'hui avec ce modèle. On valide l'identité sans casser ce flux.
+  return data.user
+}
+
+async function consumeRateLimit(
+  scope: string,
+  subject: string,
+  limit: number,
+  windowSeconds: number,
+): Promise<RateLimitResult> {
+  try {
+    const client = serviceClient()
+    const { data, error } = await client.rpc(
+      'project_xp_consume_edge_rate_limit',
+      {
+        p_scope: scope,
+        p_subject: subject,
+        p_limit: limit,
+        p_window_seconds: windowSeconds,
+      },
+    )
+
+    if (error) {
+      console.warn(
+        'Garde-fou de quota Steam indisponible ; exécution conservée.',
+      )
+      return {
+        allowed: true,
+        remaining: limit,
+        resetAt: '',
+        degraded: true,
+      }
+    }
+
+    const row = Array.isArray(data) ? data[0] : data
+    if (!row || typeof row !== 'object') {
+      return {
+        allowed: true,
+        remaining: limit,
+        resetAt: '',
+        degraded: true,
+      }
+    }
+
+    const record = row as JsonRecord
+    return {
+      allowed: record.allowed === true,
+      remaining: Number(record.remaining ?? 0),
+      resetAt: String(record.reset_at ?? ''),
+      degraded: false,
+    }
+  } catch (_) {
+    console.warn(
+      'Garde-fou de quota Steam indisponible ; exécution conservée.',
+    )
+    return {
+      allowed: true,
+      remaining: limit,
+      resetAt: '',
+      degraded: true,
+    }
+  }
 }
 
 function extractSteamReference(raw: string) {
@@ -67,7 +202,7 @@ async function steamJson(url: URL) {
   try {
     data = JSON.parse(text)
   } catch (_) {
-    // Une erreur lisible sera générée ci-dessous.
+    // Keep null so the caller gets a clean error.
   }
 
   if (!response.ok) {
@@ -83,7 +218,6 @@ async function steamJson(url: URL) {
 
 async function resolveSteamId(reference: string, apiKey: string) {
   const parsed = extractSteamReference(reference)
-
   if (parsed.steamId) {
     return parsed.steamId
   }
@@ -123,7 +257,6 @@ async function resolveSteamId(reference: string, apiKey: string) {
 
 async function syncLibrary(body: JsonRecord, apiKey: string) {
   const steamRef = String(body.steamRef ?? '').trim()
-
   if (!steamRef) {
     return jsonResponse(
       { ok: false, error: 'Profil Steam manquant.' },
@@ -132,7 +265,6 @@ async function syncLibrary(body: JsonRecord, apiKey: string) {
   }
 
   const steamId = await resolveSteamId(steamRef, apiKey)
-
   const url = new URL(
     'https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/',
   )
@@ -175,9 +307,71 @@ async function syncLibrary(body: JsonRecord, apiKey: string) {
   })
 }
 
-async function loadSchema(appId: string, apiKey: string) {
+async function syncAchievements(body: JsonRecord, apiKey: string) {
+  const steamId = String(body.steamId ?? '').trim()
+  const appId = String(body.appId ?? '').trim()
+
+  if (!/^\d{17}$/.test(steamId) || !/^\d+$/.test(appId)) {
+    return jsonResponse(
+      { ok: false, error: 'SteamID ou AppID invalide.' },
+      400,
+    )
+  }
+
+  const playerUrl = new URL(
+    'https://api.steampowered.com/ISteamUserStats/GetPlayerAchievements/v1/',
+  )
+  playerUrl.searchParams.set('key', apiKey)
+  playerUrl.searchParams.set('steamid', steamId)
+  playerUrl.searchParams.set('appid', appId)
+  playerUrl.searchParams.set('l', 'french')
+
+  const raw = await steamJson(playerUrl)
+  const playerstats =
+    raw && typeof raw === 'object'
+      ? (raw as JsonRecord).playerstats
+      : null
+
+  if (!playerstats || typeof playerstats !== 'object') {
+    throw new Error('Réponse de succès Steam invalide.')
+  }
+
+  const stats = playerstats as JsonRecord
+  if (stats.success === false) {
+    const steamError = String(stats.error ?? '').trim()
+    const normalizedError = steamError.toLowerCase()
+
+    const noAchievementSupport =
+      normalizedError.includes('no stats') ||
+      normalizedError.includes('does not have stats') ||
+      normalizedError.includes('no achievements')
+
+    if (noAchievementSupport) {
+      return jsonResponse({
+        ok: true,
+        steamId,
+        appId,
+        gameName: '',
+        unlocked: 0,
+        total: 0,
+        achievements: [],
+        noAchievements: true,
+      })
+    }
+
+    return jsonResponse({
+      ok: false,
+      error:
+        steamError ||
+        'Les succès de ce jeu sont privés ou indisponibles sur Steam.',
+    })
+  }
+
+  const playerAchievements = Array.isArray(stats.achievements)
+    ? stats.achievements
+    : []
+
   const schemaById = new Map<string, JsonRecord>()
-  let gameName = ''
 
   try {
     const schemaUrl = new URL(
@@ -192,413 +386,48 @@ async function loadSchema(appId: string, apiKey: string) {
       schemaRaw && typeof schemaRaw === 'object'
         ? (schemaRaw as JsonRecord).game
         : null
+    const availableGameStats =
+      game && typeof game === 'object'
+        ? (game as JsonRecord).availableGameStats
+        : null
+    const schemaAchievements =
+      availableGameStats && typeof availableGameStats === 'object'
+        ? (availableGameStats as JsonRecord).achievements
+        : null
 
-    if (game && typeof game === 'object') {
-      const gameRecord = game as JsonRecord
-      gameName = String(gameRecord.gameName ?? '').trim()
-
-      const availableGameStats = gameRecord.availableGameStats
-      const schemaAchievements =
-        availableGameStats &&
-        typeof availableGameStats === 'object'
-          ? (availableGameStats as JsonRecord).achievements
-          : null
-
-      if (Array.isArray(schemaAchievements)) {
-        for (const item of schemaAchievements) {
-          if (!item || typeof item !== 'object') {
-            continue
-          }
-
-          const row = item as JsonRecord
-          const id = String(row.name ?? '').trim()
-
-          if (id) {
-            schemaById.set(id, row)
-          }
+    if (Array.isArray(schemaAchievements)) {
+      for (const item of schemaAchievements) {
+        if (!item || typeof item !== 'object') {
+          continue
+        }
+        const row = item as JsonRecord
+        const id = String(row.name ?? '').trim()
+        if (id) {
+          schemaById.set(id, row)
         }
       }
     }
   } catch (_) {
-    // Le schéma est un enrichissement. L'état joueur peut rester exploitable.
-  }
-
-  return { schemaById, gameName }
-}
-
-type PlayerAchievementLoad = {
-  rows: JsonRecord[] | null
-  gameName: string
-  source: string
-  error: string
-}
-
-async function loadPlayerAchievements(
-  steamId: string,
-  appId: string,
-  apiKey: string,
-): Promise<PlayerAchievementLoad> {
-  const errors: string[] = []
-  let primaryEmpty = false
-  let fallbackEmpty = false
-  let primaryGameName = ''
-  let fallbackGameName = ''
-
-  // Source principale : endpoint dédié aux succès.
-  // Une réponse vide n'est plus considérée comme définitive : on vérifie
-  // systématiquement le second endpoint avant de conclure qu'un jeu n'a
-  // réellement aucun accomplissement côté joueur.
-  try {
-    const playerUrl = new URL(
-      'https://api.steampowered.com/ISteamUserStats/GetPlayerAchievements/v1/',
-    )
-    playerUrl.searchParams.set('key', apiKey)
-    playerUrl.searchParams.set('steamid', steamId)
-    playerUrl.searchParams.set('appid', appId)
-    playerUrl.searchParams.set('l', 'french')
-
-    const raw = await steamJson(playerUrl)
-    const playerstats =
-      raw && typeof raw === 'object'
-        ? (raw as JsonRecord).playerstats
-        : null
-
-    if (playerstats && typeof playerstats === 'object') {
-      const stats = playerstats as JsonRecord
-
-      if (stats.success !== false) {
-        const rows = Array.isArray(stats.achievements)
-          ? stats.achievements
-              .filter(
-                (item) =>
-                  item != null &&
-                  typeof item === 'object',
-              )
-              .map((item) => item as JsonRecord)
-          : []
-
-        primaryGameName = String(stats.gameName ?? '').trim()
-
-        if (rows.length > 0) {
-          return {
-            rows,
-            gameName: primaryGameName,
-            source: 'GetPlayerAchievements',
-            error: '',
-          }
-        }
-
-        primaryEmpty = true
-        errors.push('GetPlayerAchievements sans accomplissement')
-      } else {
-        const message = String(stats.error ?? '').trim()
-        if (message) {
-          errors.push(message)
-        }
-      }
-    } else {
-      errors.push('Réponse GetPlayerAchievements invalide')
-    }
-  } catch (error) {
-    errors.push(
-      error instanceof Error ? error.message : String(error),
-    )
-  }
-
-  // Fallback : certains jeux répondent mal au premier endpoint alors que
-  // GetUserStatsForGame expose bien les accomplissements du joueur.
-  try {
-    const statsUrl = new URL(
-      'https://api.steampowered.com/ISteamUserStats/GetUserStatsForGame/v2/',
-    )
-    statsUrl.searchParams.set('key', apiKey)
-    statsUrl.searchParams.set('steamid', steamId)
-    statsUrl.searchParams.set('appid', appId)
-
-    const raw = await steamJson(statsUrl)
-    const playerstats =
-      raw && typeof raw === 'object'
-        ? (raw as JsonRecord).playerstats
-        : null
-
-    if (playerstats && typeof playerstats === 'object') {
-      const stats = playerstats as JsonRecord
-      fallbackGameName = String(stats.gameName ?? '').trim()
-      const sourceRows = Array.isArray(stats.achievements)
-        ? stats.achievements
-        : []
-
-      if (sourceRows.length > 0) {
-        const rows: JsonRecord[] = []
-
-        for (const item of sourceRows) {
-          if (!item || typeof item !== 'object') {
-            continue
-          }
-
-          const row = item as JsonRecord
-          const id = String(
-            row.name ?? row.apiname ?? '',
-          ).trim()
-
-          if (!id) {
-            continue
-          }
-
-          rows.push({
-            apiname: id,
-            achieved:
-              Number(row.achieved ?? row.achieved_at ?? 0) > 0
-                ? 1
-                : 0,
-            unlocktime: Number(row.unlocktime ?? 0),
-          })
-        }
-
-        if (rows.length > 0) {
-          return {
-            rows,
-            gameName: fallbackGameName,
-            source: 'GetUserStatsForGame',
-            error: '',
-          }
-        }
-
-        errors.push(
-          'GetUserStatsForGame a renvoyé des accomplissements sans identifiant',
-        )
-      } else {
-        fallbackEmpty = true
-        errors.push('GetUserStatsForGame sans accomplissement')
-      }
-    } else {
-      errors.push('Réponse GetUserStatsForGame invalide')
-    }
-  } catch (error) {
-    errors.push(
-      error instanceof Error ? error.message : String(error),
-    )
-  }
-
-  // On n'accepte une liste réellement vide que si les deux endpoints Steam
-  // ont répondu correctement et sont tous les deux vides. Si un seul des deux
-  // a échoué, on préfère signaler une progression indisponible plutôt que
-  // d'écraser une progression existante par un faux 0 %.
-  if (primaryEmpty && fallbackEmpty) {
-    return {
-      rows: [],
-      gameName: primaryGameName || fallbackGameName,
-      source: 'confirmed-empty',
-      error: errors
-        .filter((value) => value.trim().length > 0)
-        .join(' / '),
-    }
-  }
-
-  return {
-    rows: null,
-    gameName: primaryGameName || fallbackGameName,
-    source: '',
-    error: errors
-      .filter((value) => value.trim().length > 0)
-      .join(' / '),
-  }
-}
-
-function looksLikeNoStats(raw: string) {
-  const value = raw.toLowerCase()
-
-  return value.includes('no stats') ||
-    value.includes('has no stats') ||
-    value.includes('does not have stats') ||
-    value.includes('no stats are available') ||
-    value.includes('stats are not available for this app') ||
-    value.includes('no achievements') ||
-    value.includes('does not have achievements') ||
-    value.includes('requested app has no stats')
-}
-
-async function loadStoreAchievementSupport(
-  appId: string,
-): Promise<boolean | null> {
-  try {
-    const url = new URL(
-      'https://store.steampowered.com/api/appdetails',
-    )
-    url.searchParams.set('appids', appId)
-    url.searchParams.set('cc', 'us')
-    url.searchParams.set('l', 'english')
-
-    const raw = await steamJson(url)
-    if (!raw || typeof raw !== 'object') {
-      return null
-    }
-
-    const appRaw = (raw as JsonRecord)[appId]
-    if (!appRaw || typeof appRaw !== 'object') {
-      return null
-    }
-
-    const app = appRaw as JsonRecord
-    if (app.success !== true ||
-        !app.data ||
-        typeof app.data !== 'object') {
-      return null
-    }
-
-    const data = app.data as JsonRecord
-    const categories = Array.isArray(data.categories)
-      ? data.categories
-      : []
-
-    // Une fiche Store valide contient normalement plusieurs catégories.
-    // Si elles sont absentes, on ne déduit rien afin d'éviter un faux
-    // "sans succès" sur une réponse Steam incomplète.
-    if (categories.length === 0) {
-      return null
-    }
-
-    for (const item of categories) {
-      if (!item || typeof item !== 'object') {
-        continue
-      }
-
-      const category = item as JsonRecord
-      const id = Number(category.id ?? -1)
-      const description = String(
-        category.description ?? '',
-      ).toLowerCase()
-
-      // Steam utilise actuellement la catégorie 22 pour les succès.
-      // Le libellé sert de garde supplémentaire si l'identifiant évolue.
-      if (id === 22 ||
-          description.includes('steam achievements') ||
-          description.includes('succès steam')) {
-        return true
-      }
-    }
-
-    return false
-  } catch (_) {
-    // La fiche Store est uniquement un filet de sécurité : une panne de ce
-    // endpoint ne doit jamais transformer un jeu en faux "sans succès".
-    return null
-  }
-}
-
-async function syncAchievements(body: JsonRecord, apiKey: string) {
-  const steamId = String(body.steamId ?? '').trim()
-  const appId = String(body.appId ?? '').trim()
-
-  if (!/^\d{17}$/.test(steamId) || !/^\d+$/.test(appId)) {
-    return jsonResponse(
-      { ok: false, error: 'SteamID ou AppID invalide.' },
-      400,
-    )
-  }
-
-  const schema = await loadSchema(appId, apiKey)
-
-  const player = await loadPlayerAchievements(
-    steamId,
-    appId,
-    apiKey,
-  )
-
-  if (player.rows == null) {
-    if (schema.schemaById.size === 0) {
-      const storeAchievementSupport =
-        await loadStoreAchievementSupport(appId)
-
-      if (looksLikeNoStats(player.error) ||
-          storeAchievementSupport === false) {
-        return jsonResponse({
-          ok: true,
-          steamId,
-          appId,
-          gameName: schema.gameName,
-          unlocked: 0,
-          total: 0,
-          achievements: [],
-          noAchievements: true,
-          playerProgressAvailable: true,
-          source: storeAchievementSupport === false
-            ? 'steam-store-no-achievements'
-            : 'steam-api-no-stats',
-        })
-      }
-    }
-
-    if (schema.schemaById.size > 0) {
-      return jsonResponse({
-        ok: false,
-        code: 'player_progress_unavailable',
-        achievementCount: schema.schemaById.size,
-        error:
-          `Steam expose ${schema.schemaById.size} succès pour ce jeu, ` +
-          `mais la progression du joueur est temporairement indisponible.` +
-          (player.error ? ` ${player.error}` : ''),
-      })
-    }
-
-    return jsonResponse({
-      ok: false,
-      code: 'steam_achievements_unavailable',
-      error:
-        player.error ||
-        'Les succès de ce jeu sont privés ou indisponibles sur Steam.',
-    })
-  }
-
-  // Les deux endpoints joueur ont confirmé une liste vide. Si le schéma Steam
-  // connaît pourtant des succès, cette contradiction ne doit jamais devenir
-  // un faux 0 %. On signale le jeu comme temporairement indisponible et
-  // Project XP conserve les données précédentes.
-  if (player.rows.length === 0) {
-    if (schema.schemaById.size > 0) {
-      return jsonResponse({
-        ok: false,
-        code: 'player_progress_unavailable',
-        achievementCount: schema.schemaById.size,
-        error:
-          `Steam expose ${schema.schemaById.size} succès pour ce jeu, ` +
-          'mais les deux endpoints de progression ont renvoyé une liste vide.',
-      })
-    }
-
-    return jsonResponse({
-      ok: true,
-      steamId,
-      appId,
-      gameName: player.gameName || schema.gameName,
-      unlocked: 0,
-      total: 0,
-      achievements: [],
-      noAchievements: true,
-      playerProgressAvailable: true,
-      source: player.source,
-    })
+    // Fallback volontaire : les noms et états joueur restent exploitables.
   }
 
   const achievements: JsonRecord[] = []
   let unlocked = 0
 
-  for (const playerRow of player.rows) {
-    const id = String(
-      playerRow.apiname ??
-      playerRow.name ??
-      '',
-    ).trim()
+  for (const item of playerAchievements) {
+    if (!item || typeof item !== 'object') {
+      continue
+    }
 
+    const player = item as JsonRecord
+    const id = String(player.apiname ?? '').trim()
     if (!id) {
       continue
     }
 
-    const schemaRow = schema.schemaById.get(id)
-    const isUnlocked =
-      Number(playerRow.achieved ?? 0) === 1
-    const unlockTime =
-      Number(playerRow.unlocktime ?? 0)
+    const schema = schemaById.get(id)
+    const isUnlocked = Number(player.achieved ?? 0) === 1
+    const unlockTime = Number(player.unlocktime ?? 0)
 
     if (isUnlocked) {
       unlocked += 1
@@ -607,22 +436,21 @@ async function syncAchievements(body: JsonRecord, apiKey: string) {
     achievements.push({
       id,
       name: String(
-        playerRow.name ??
-          schemaRow?.displayName ??
+        player.name ??
+          schema?.displayName ??
           id,
       ),
       description: String(
-        playerRow.description ??
-          schemaRow?.description ??
+        player.description ??
+          schema?.description ??
           '',
       ),
       iconUrl: String(
-        schemaRow?.icon ??
-          schemaRow?.icongray ??
+        schema?.icon ??
+          schema?.icongray ??
           '',
       ),
-      hidden:
-        Number(schemaRow?.hidden ?? 0) === 1,
+      hidden: Number(schema?.hidden ?? 0) === 1,
       platformUnlocked: isUnlocked,
       platformUnlockedAt:
         isUnlocked && unlockTime > 0
@@ -631,23 +459,17 @@ async function syncAchievements(body: JsonRecord, apiKey: string) {
     })
   }
 
-  // Complète avec le schéma quand Steam renvoie une liste joueur partielle.
-  for (const [id, schemaRow] of schema.schemaById.entries()) {
+  for (const [id, schema] of schemaById.entries()) {
     if (achievements.some((item) => item.id === id)) {
       continue
     }
 
     achievements.push({
       id,
-      name: String(schemaRow.displayName ?? id),
-      description: String(schemaRow.description ?? ''),
-      iconUrl: String(
-        schemaRow.icongray ??
-          schemaRow.icon ??
-          '',
-      ),
-      hidden:
-        Number(schemaRow.hidden ?? 0) === 1,
+      name: String(schema.displayName ?? id),
+      description: String(schema.description ?? ''),
+      iconUrl: String(schema.icongray ?? schema.icon ?? ''),
+      hidden: Number(schema.hidden ?? 0) === 1,
       platformUnlocked: false,
       platformUnlockedAt: null,
     })
@@ -665,14 +487,10 @@ async function syncAchievements(body: JsonRecord, apiKey: string) {
     ok: true,
     steamId,
     appId,
-    gameName:
-      player.gameName ||
-      schema.gameName,
+    gameName: String(stats.gameName ?? ''),
     unlocked,
     total: achievements.length,
     achievements,
-    playerProgressAvailable: true,
-    source: player.source,
   })
 }
 
@@ -688,36 +506,71 @@ serve(async (request) => {
     )
   }
 
-  const apiKey =
-    Deno.env.get('STEAM_WEB_API_KEY')?.trim() ?? ''
-
-  if (!apiKey) {
-    return jsonResponse(
-      {
-        ok: false,
-        error:
-          'STEAM_WEB_API_KEY n’est pas configurée dans les secrets Supabase.',
-      },
-      503,
-    )
-  }
-
   try {
+    const user = await authenticatedUser(request)
+    if (!user) {
+      return jsonResponse(
+        { ok: false, error: 'Session Project XP invalide.' },
+        401,
+      )
+    }
+
     const body = (await request.json()) as JsonRecord
     const action = String(body.action ?? '')
+
+    let rateLimit: RateLimitResult
+    if (action === 'library') {
+      rateLimit = await consumeRateLimit(
+        'steam-sync.library',
+        user.id,
+        12,
+        600,
+      )
+    } else if (action === 'achievements') {
+      // Très volontairement large : "Synchroniser tout" peut parcourir une
+      // grosse bibliothèque et ne doit pas être cassé par la sécurité.
+      rateLimit = await consumeRateLimit(
+        'steam-sync.achievements',
+        user.id,
+        600,
+        600,
+      )
+    } else {
+      return jsonResponse(
+        { ok: false, error: 'Action Steam inconnue.' },
+        400,
+      )
+    }
+
+    if (!rateLimit.allowed) {
+      return jsonResponse(
+        {
+          ok: false,
+          error:
+            'Trop de requêtes Steam. Réessaie dans quelques instants.',
+          retryAfter: rateLimit.resetAt,
+        },
+        429,
+      )
+    }
+
+    const apiKey = env('STEAM_WEB_API_KEY')
+    if (!apiKey) {
+      return jsonResponse(
+        {
+          ok: false,
+          error:
+            'STEAM_WEB_API_KEY n’est pas configurée dans les secrets Supabase.',
+        },
+        503,
+      )
+    }
 
     if (action === 'library') {
       return await syncLibrary(body, apiKey)
     }
 
-    if (action === 'achievements') {
-      return await syncAchievements(body, apiKey)
-    }
-
-    return jsonResponse(
-      { ok: false, error: 'Action Steam inconnue.' },
-      400,
-    )
+    return await syncAchievements(body, apiKey)
   } catch (error) {
     const message =
       error instanceof Error

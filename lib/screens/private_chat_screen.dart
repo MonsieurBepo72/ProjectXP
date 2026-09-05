@@ -226,6 +226,8 @@ class _PrivateChatScreenState
       return;
     }
 
+    _messageFocusNode.unfocus();
+
     final ContentModerationResult localModeration =
         ContentModerationService.checkTextImmediate(
       content,
@@ -235,7 +237,6 @@ class _PrivateChatScreenState
       // Même comportement que dans la Taverne : si Project XP refuse
       // le contenu, il ne reste pas dans la barre de saisie.
       _messageController.clear();
-      _messageFocusNode.requestFocus();
 
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -258,7 +259,6 @@ class _PrivateChatScreenState
       _messageController.clear();
     });
 
-    _messageFocusNode.requestFocus();
     _scrollToBottom();
 
     final ProjectXpMessageSendResult result =
@@ -278,7 +278,6 @@ class _PrivateChatScreenState
     });
 
     if (result.sent) {
-      _messageFocusNode.requestFocus();
       _scrollToBottom();
       return;
     }
@@ -302,8 +301,6 @@ class _PrivateChatScreenState
         offset: content.length,
       );
     }
-
-    _messageFocusNode.requestFocus();
 
     if (result.rateLimited) {
       ScaffoldMessenger.of(context).showSnackBar(

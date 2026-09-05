@@ -1,6 +1,7 @@
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { francAll } from 'npm:franc@6.2.0';
 import { Profanity } from 'npm:@2toad/profanity@3.3.0';
+import { classifyLexicalRpcError } from './lexical_guard.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -29,7 +30,7 @@ const OPENAI_MODERATION_ENABLED =
 const MAX_CONTENT_LENGTH = 2000;
 
 const MODERATION_PIPELINE_VERSION =
-  '2.4.8';
+  '2.4.9';
 
 const BUNDLED_PROFANITY_LANGUAGES =
   new Set<string>([
@@ -613,12 +614,19 @@ Deno.serve(async (req: Request) => {
   // ---------------------------------------------------------------------------
 
   const lexicalPromise =
-    adminClient.rpc(
-      'project_xp_assert_message_allowed',
-      {
-        p_content: content,
-      },
-    );
+    adminClient
+      .rpc(
+        'project_xp_assert_message_allowed',
+        {
+          p_content: content,
+        },
+      )
+      .then(
+        ({ error }) =>
+          classifyLexicalRpcError(error),
+        (error) =>
+          classifyLexicalRpcError(error),
+      );
 
   const lexiconPromise =
     scanGlobalLexicon(
@@ -691,8 +699,7 @@ Deno.serve(async (req: Request) => {
           userId: user.id,
           surface,
           content,
-          lexicalBlocked:
-            lexicalResult.error != null,
+          lexicalBlocked: lexicalResult.blocked,
           bundledProfanitySignal,
           lexicon,
           moderation,
@@ -763,6 +770,7 @@ Deno.serve(async (req: Request) => {
         moderation_pipeline:
           MODERATION_PIPELINE_VERSION,
         moderation_degraded:
+          lexicalResult.degraded ||
           moderation.degraded ||
           lexicon.degraded,
       },
@@ -816,8 +824,7 @@ Deno.serve(async (req: Request) => {
         userId: user.id,
         surface,
         content,
-        lexicalBlocked:
-          lexicalResult.error != null,
+        lexicalBlocked: lexicalResult.blocked,
         bundledProfanitySignal,
         lexicon,
         moderation,
@@ -914,6 +921,7 @@ Deno.serve(async (req: Request) => {
       moderation_pipeline:
         MODERATION_PIPELINE_VERSION,
       moderation_degraded:
+        lexicalResult.degraded ||
         moderation.degraded ||
         lexicon.degraded,
     },

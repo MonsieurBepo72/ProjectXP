@@ -4,7 +4,6 @@ type PrivateMessageRecord = {
   id: string
   conversation_id: string
   sender_id: string
-  content: string
   created_at?: string
 }
 
@@ -23,6 +22,16 @@ type FirebaseServiceAccount = {
   token_uri?: string
 }
 
+type JsonRecord = Record<string, unknown>
+
+type DeliveryClaim = {
+  available: boolean
+  claimed: boolean
+  state: string
+}
+
+let legacyWebhookWarningShown = false
+
 function jsonResponse(
   body: Record<string, unknown>,
   status = 200,
@@ -39,17 +48,17 @@ function jsonResponse(
   )
 }
 
-function getSupabaseAdminKey(): string {
-  const legacyKey =
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
+function env(name: string): string {
+  return Deno.env.get(name)?.trim() ?? ''
+}
 
-  if (legacyKey && legacyKey.trim().length > 0) {
+function getSupabaseAdminKey(): string {
+  const legacyKey = env('SUPABASE_SERVICE_ROLE_KEY')
+  if (legacyKey.length > 0) {
     return legacyKey
   }
 
-  const rawSecretKeys =
-      Deno.env.get('SUPABASE_SECRET_KEYS')
-
+  const rawSecretKeys = env('SUPABASE_SECRET_KEYS')
   if (!rawSecretKeys) {
     throw new Error(
       'Clé serveur Supabase introuvable.',
@@ -59,18 +68,16 @@ function getSupabaseAdminKey(): string {
   const parsed =
       JSON.parse(rawSecretKeys) as Record<string, string>
 
-  const defaultKey = parsed.default
-
-  if (defaultKey && defaultKey.trim().length > 0) {
+  const defaultKey =
+      String(parsed.default ?? '').trim()
+  if (defaultKey.length > 0) {
     return defaultKey
   }
 
   const firstKey =
-      Object.values(parsed).find(
-        (value) =>
-            typeof value === 'string' &&
-            value.trim().length > 0,
-      )
+      Object.values(parsed)
+        .map((value) => String(value ?? '').trim())
+        .find((value) => value.length > 0)
 
   if (!firstKey) {
     throw new Error(
@@ -81,7 +88,23 @@ function getSupabaseAdminKey(): string {
   return firstKey
 }
 
-function isAuthorizedWebhookRequest(
+function safeEqual(left: string, right: string): boolean {
+  const encoder = new TextEncoder()
+  const leftBytes = encoder.encode(left)
+  const rightBytes = encoder.encode(right)
+
+  if (leftBytes.length !== rightBytes.length) {
+    return false
+  }
+
+  let difference = 0
+  for (let index = 0; index < leftBytes.length; index += 1) {
+    difference |= leftBytes[index] ^ rightBytes[index]
+  }
+  return difference === 0
+}
+
+function isLegacyAuthorizedWebhookRequest(
   req: Request,
 ): boolean {
   const providedKey =
@@ -93,53 +116,69 @@ function isAuthorizedWebhookRequest(
 
   const acceptedKeys: string[] = []
 
-  const legacyKey =
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
-        ?.trim()
-
-  if (
-    legacyKey &&
-    legacyKey.length > 0
-  ) {
-    acceptedKeys.push(
-      legacyKey,
-    )
+  const legacyKey = env('SUPABASE_SERVICE_ROLE_KEY')
+  if (legacyKey.length > 0) {
+    acceptedKeys.push(legacyKey)
   }
 
-  const rawSecretKeys =
-      Deno.env.get('SUPABASE_SECRET_KEYS')
-
+  const rawSecretKeys = env('SUPABASE_SECRET_KEYS')
   if (rawSecretKeys) {
     try {
       const parsed =
-          JSON.parse(
-            rawSecretKeys,
-          ) as Record<string, string>
+          JSON.parse(rawSecretKeys) as Record<string, string>
 
-      for (
-        const value
-        of Object.values(parsed)
-      ) {
-        if (
-          typeof value === 'string' &&
-          value.trim().length > 0
-        ) {
-          acceptedKeys.push(
-            value.trim(),
-          )
+      for (const value of Object.values(parsed)) {
+        const clean = String(value ?? '').trim()
+        if (clean.length > 0) {
+          acceptedKeys.push(clean)
         }
       }
-    } catch (error) {
+    } catch (_) {
       console.error(
-        'Impossible de lire SUPABASE_SECRET_KEYS :',
-        error,
+        'Impossible de lire SUPABASE_SECRET_KEYS.',
       )
     }
   }
 
-  return acceptedKeys.includes(
-    providedKey,
+  return acceptedKeys.some(
+    (acceptedKey) => safeEqual(acceptedKey, providedKey),
   )
+}
+
+function isAuthorizedWebhookRequest(
+  req: Request,
+): boolean {
+  const dedicatedSecret =
+      env('PROJECT_XP_PRIVATE_MESSAGE_WEBHOOK_SECRET')
+
+  if (dedicatedSecret.length > 0) {
+    if (dedicatedSecret.length < 32) {
+      console.error(
+        'PROJECT_XP_PRIVATE_MESSAGE_WEBHOOK_SECRET doit faire au moins 32 caractères.',
+      )
+      return false
+    }
+
+    const providedSecret =
+        req.headers
+          .get('x-project-xp-webhook-secret')
+          ?.trim() ?? ''
+
+    return providedSecret.length > 0 &&
+        safeEqual(dedicatedSecret, providedSecret)
+  }
+
+  // Compatibilité volontaire pendant la migration : tant que le secret dédié
+  // n'est pas activé, le webhook existant continue de fonctionner avec la clé
+  // serveur Supabase. INSTALLATION.txt explique l'ordre sûr pour basculer.
+  if (!legacyWebhookWarningShown) {
+    legacyWebhookWarningShown = true
+    console.warn(
+      'Webhook Project XP en mode compatibilité : configure le secret dédié.',
+    )
+  }
+
+  return isLegacyAuthorizedWebhookRequest(req)
 }
 
 function base64UrlEncode(
@@ -197,8 +236,7 @@ function pemToArrayBuffer(
 async function createGoogleAccessToken(
   serviceAccount: FirebaseServiceAccount,
 ): Promise<string> {
-  const now =
-      Math.floor(Date.now() / 1000)
+  const now = Math.floor(Date.now() / 1000)
 
   const header = {
     alg: 'RS256',
@@ -270,15 +308,15 @@ async function createGoogleAccessToken(
       )
 
   const tokenBody =
-      await tokenResponse.json()
+      await tokenResponse.json() as JsonRecord
 
   if (
     !tokenResponse.ok ||
     typeof tokenBody.access_token !== 'string'
   ) {
     console.error(
-      'Erreur OAuth Firebase :',
-      tokenBody,
+      'Erreur OAuth Firebase HTTP',
+      tokenResponse.status,
     )
 
     throw new Error(
@@ -319,26 +357,20 @@ async function sendFcmNotification({
             message: {
               token,
               notification: {
-                title:
-                    'Nouveau message',
+                title: 'Nouveau message',
                 body:
                     `${senderName} t’a envoyé un message.`,
               },
               data: {
-                type:
-                    'private_message',
-                conversation_id:
-                    conversationId,
-                sender_id:
-                    senderId,
-                sender_name:
-                    senderName,
+                type: 'private_message',
+                conversation_id: conversationId,
+                sender_id: senderId,
+                sender_name: senderName,
               },
               android: {
                 priority: 'high',
                 notification: {
-                  channel_id:
-                      'project_xp_alerts',
+                  channel_id: 'project_xp_alerts',
                   sound: 'default',
                 },
               },
@@ -347,21 +379,93 @@ async function sendFcmNotification({
         },
       )
 
-  const responseText =
-      await response.text()
-
+  // On ne journalise volontairement ni le token appareil ni la réponse FCM.
   if (!response.ok) {
     console.error(
-      'Erreur FCM :',
+      'Erreur FCM HTTP',
       response.status,
-      responseText,
     )
   }
 
-  return {
-    ok: response.ok,
-    status: response.status,
-    responseText,
+  return response.ok
+}
+
+async function claimDelivery(
+  supabaseAdmin: ReturnType<typeof createClient>,
+  messageId: string,
+): Promise<DeliveryClaim> {
+  try {
+    const { data, error } = await supabaseAdmin.rpc(
+      'project_xp_claim_private_message_notification',
+      {
+        p_message_id: messageId,
+        p_lease_seconds: 120,
+      },
+    )
+
+    if (error) {
+      console.warn(
+        'Idempotence notification indisponible ; envoi conservé.',
+      )
+      return {
+        available: false,
+        claimed: true,
+        state: 'degraded',
+      }
+    }
+
+    const row = Array.isArray(data) ? data[0] : data
+    if (!row || typeof row !== 'object') {
+      return {
+        available: false,
+        claimed: true,
+        state: 'degraded',
+      }
+    }
+
+    const record = row as JsonRecord
+    return {
+      available: true,
+      claimed: record.claimed === true,
+      state: String(record.delivery_state ?? ''),
+    }
+  } catch (_) {
+    console.warn(
+      'Idempotence notification indisponible ; envoi conservé.',
+    )
+    return {
+      available: false,
+      claimed: true,
+      state: 'degraded',
+    }
+  }
+}
+
+async function finishDelivery(
+  supabaseAdmin: ReturnType<typeof createClient>,
+  messageId: string,
+  success: boolean,
+  errorCode: string | null = null,
+) {
+  try {
+    const { error } = await supabaseAdmin.rpc(
+      'project_xp_finish_private_message_notification',
+      {
+        p_message_id: messageId,
+        p_success: success,
+        p_error: errorCode,
+      },
+    )
+
+    if (error) {
+      console.warn(
+        'Finalisation idempotence notification indisponible.',
+      )
+    }
+  } catch (_) {
+    console.warn(
+      'Finalisation idempotence notification indisponible.',
+    )
   }
 }
 
@@ -369,27 +473,24 @@ Deno.serve(
   async (req: Request) => {
     if (req.method !== 'POST') {
       return jsonResponse(
-        {
-          error:
-              'Méthode non autorisée.',
-        },
+        { error: 'Méthode non autorisée.' },
         405,
       )
     }
 
-    // Le Database Webhook envoie la clé serveur Supabase
-    // dans le header "apikey". La vérification JWT de la
-    // plateforme doit être désactivée pour cette fonction,
-    // puis l'authentification est contrôlée ici.
+    // verify_jwt reste désactivé pour ce Database Webhook. L'authentification
+    // dédiée est contrôlée ici, avec fallback compatible pendant la migration.
     if (!isAuthorizedWebhookRequest(req)) {
       return jsonResponse(
-        {
-          error:
-              'Webhook non autorisé.',
-        },
+        { error: 'Webhook non autorisé.' },
         401,
       )
     }
+
+    let supabaseAdmin:
+        ReturnType<typeof createClient> | null = null
+    let claimedMessageId = ''
+    let deliveryClaimed = false
 
     try {
       const payload =
@@ -402,13 +503,11 @@ Deno.serve(
       ) {
         return jsonResponse({
           ignored: true,
-          reason:
-              'Événement non concerné.',
+          reason: 'Événement non concerné.',
         })
       }
 
-      const message =
-          payload.record
+      const message = payload.record
 
       if (
         !message?.id ||
@@ -416,24 +515,17 @@ Deno.serve(
         !message.sender_id
       ) {
         return jsonResponse(
-          {
-            error:
-                'Message privé incomplet.',
-          },
+          { error: 'Message privé incomplet.' },
           400,
         )
       }
 
-      const supabaseUrl =
-          Deno.env.get('SUPABASE_URL')
-
+      const supabaseUrl = env('SUPABASE_URL')
       if (!supabaseUrl) {
-        throw new Error(
-          'SUPABASE_URL introuvable.',
-        )
+        throw new Error('SUPABASE_URL introuvable.')
       }
 
-      const supabaseAdmin =
+      supabaseAdmin =
           createClient(
             supabaseUrl,
             getSupabaseAdminKey(),
@@ -445,9 +537,8 @@ Deno.serve(
             },
           )
 
-      // On relit le message dans la base.
-      // Cela évite de faire confiance uniquement
-      // au contenu reçu par le webhook.
+      // On relit les données sensibles côté serveur et on ne fait pas confiance
+      // au contenu fourni dans le payload du webhook.
       const {
         data: storedMessage,
         error: messageError,
@@ -455,28 +546,14 @@ Deno.serve(
           await supabaseAdmin
             .from('private_messages')
             .select(
-              'id, conversation_id, sender_id, content',
+              'id, conversation_id, sender_id',
             )
-            .eq(
-              'id',
-              message.id,
-            )
+            .eq('id', message.id)
             .single()
 
-      if (
-        messageError ||
-        !storedMessage
-      ) {
-        console.error(
-          'Message introuvable :',
-          messageError,
-        )
-
+      if (messageError || !storedMessage) {
         return jsonResponse(
-          {
-            error:
-                'Message privé introuvable.',
-          },
+          { error: 'Message privé introuvable.' },
           404,
         )
       }
@@ -487,9 +564,7 @@ Deno.serve(
       } =
           await supabaseAdmin
             .from('private_conversations')
-            .select(
-              'id, user_a, user_b',
-            )
+            .select('id, user_a, user_b')
             .eq(
               'id',
               storedMessage.conversation_id,
@@ -500,16 +575,8 @@ Deno.serve(
         conversationError ||
         !conversation
       ) {
-        console.error(
-          'Conversation introuvable :',
-          conversationError,
-        )
-
         return jsonResponse(
-          {
-            error:
-                'Conversation privée introuvable.',
-          },
+          { error: 'Conversation privée introuvable.' },
           404,
         )
       }
@@ -520,27 +587,41 @@ Deno.serve(
         storedMessage.sender_id ===
         conversation.user_a
       ) {
-        recipientId =
-            conversation.user_b
+        recipientId = conversation.user_b
       } else if (
         storedMessage.sender_id ===
         conversation.user_b
       ) {
-        recipientId =
-            conversation.user_a
+        recipientId = conversation.user_a
       } else {
         return jsonResponse(
-          {
-            error:
-                'Expéditeur hors de la conversation.',
-          },
+          { error: 'Expéditeur hors de la conversation.' },
           403,
         )
       }
 
-      const {
-        data: senderProfile,
-      } =
+      // Le message est authentique et rattaché à la conversation : on peut
+      // maintenant prendre un lease atomique avant tout envoi FCM.
+      const claim = await claimDelivery(
+        supabaseAdmin,
+        String(storedMessage.id),
+      )
+
+      if (!claim.claimed) {
+        return jsonResponse({
+          ok: true,
+          ignored: true,
+          reason:
+              claim.state === 'sent'
+                ? 'Notification déjà envoyée.'
+                : 'Notification déjà en cours de traitement.',
+        })
+      }
+
+      claimedMessageId = String(storedMessage.id)
+      deliveryClaimed = claim.available
+
+      const { data: senderProfile } =
           await supabaseAdmin
             .from('tavern_profiles')
             .select('display_name')
@@ -556,18 +637,11 @@ Deno.serve(
             .trim() ||
           'Un aventurier'
 
-      // Dans les zones privées de Project XP, le surnom choisi
-      // par le destinataire est prioritaire sur le pseudo public.
-      const {
-        data: aliasRow,
-      } =
+      const { data: aliasRow } =
           await supabaseAdmin
             .from('friend_aliases')
             .select('nickname')
-            .eq(
-              'owner_id',
-              recipientId,
-            )
+            .eq('owner_id', recipientId)
             .eq(
               'friend_id',
               storedMessage.sender_id,
@@ -577,8 +651,7 @@ Deno.serve(
       const senderAlias =
           aliasRow?.nickname
             ?.toString()
-            .trim() ??
-          ''
+            .trim() ?? ''
 
       const senderName =
           senderAlias.length > 0
@@ -592,36 +665,40 @@ Deno.serve(
           await supabaseAdmin
             .from('push_device_tokens')
             .select('token')
-            .eq(
-              'user_id',
-              recipientId,
-            )
+            .eq('user_id', recipientId)
 
       if (tokenError) {
-        console.error(
-          'Erreur lecture tokens :',
-          tokenError,
-        )
-
         throw new Error(
           'Impossible de lire les appareils du destinataire.',
         )
       }
 
       const tokens =
-          (tokenRows ?? [])
-            .map(
-              (row) =>
-                  row.token
-                    ?.toString()
-                    .trim(),
-            )
-            .filter(
-              (token): token is string =>
-                  Boolean(token),
-            )
+          Array.from(
+            new Set(
+              (tokenRows ?? [])
+                .map(
+                  (row) =>
+                      row.token
+                        ?.toString()
+                        .trim(),
+                )
+                .filter(
+                  (token): token is string =>
+                      Boolean(token),
+                ),
+            ),
+          )
 
       if (tokens.length === 0) {
+        if (deliveryClaimed) {
+          await finishDelivery(
+            supabaseAdmin,
+            claimedMessageId,
+            true,
+          )
+        }
+
         return jsonResponse({
           ok: true,
           sent: 0,
@@ -631,9 +708,7 @@ Deno.serve(
       }
 
       const rawServiceAccount =
-          Deno.env.get(
-            'FIREBASE_SERVICE_ACCOUNT_JSON',
-          )
+          env('FIREBASE_SERVICE_ACCOUNT_JSON')
 
       if (!rawServiceAccount) {
         throw new Error(
@@ -661,28 +736,33 @@ Deno.serve(
             serviceAccount,
           )
 
-      const results = []
-
+      let sent = 0
       for (const token of tokens) {
-        const result =
-            await sendFcmNotification({
-              serviceAccount,
-              accessToken,
-              token,
-              senderName,
-              senderId:
-                  storedMessage.sender_id,
-              conversationId:
-                  storedMessage.conversation_id,
-            })
+        const ok = await sendFcmNotification({
+          serviceAccount,
+          accessToken,
+          token,
+          senderName,
+          senderId: storedMessage.sender_id,
+          conversationId:
+              storedMessage.conversation_id,
+        })
 
-        results.push(result)
+        if (ok) {
+          sent += 1
+        }
       }
 
-      const sent =
-          results.filter(
-            (result) => result.ok,
-          ).length
+      // Dès qu'un appareil a reçu la notification, on considère le message
+      // traité afin qu'un retry webhook ne duplique pas l'alerte déjà visible.
+      if (deliveryClaimed) {
+        await finishDelivery(
+          supabaseAdmin,
+          claimedMessageId,
+          sent > 0,
+          sent > 0 ? null : 'fcm_delivery_failed',
+        )
+      }
 
       console.log(
         `Notifications privées envoyées : ${sent}/${tokens.length}`,
@@ -694,9 +774,21 @@ Deno.serve(
         total: tokens.length,
       })
     } catch (error) {
+      if (
+        supabaseAdmin != null &&
+        deliveryClaimed &&
+        claimedMessageId.length > 0
+      ) {
+        await finishDelivery(
+          supabaseAdmin,
+          claimedMessageId,
+          false,
+          'processing_error',
+        )
+      }
+
       console.error(
-        'send-private-message-notification :',
-        error,
+        'send-private-message-notification : erreur de traitement.',
       )
 
       return jsonResponse(
