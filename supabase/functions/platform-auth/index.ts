@@ -1,5 +1,11 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.57.4'
+import {
+  exchangeAccessCodeForAuthTokens,
+  exchangeNpssoForAccessCode,
+  getProfileFromUserName,
+  getUserTitles,
+} from 'npm:psn-api@2.18.1'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -65,9 +71,93 @@ async function authenticatedUser(request: Request) {
   return data.user
 }
 
-async function startSteam(request: Request) {
+async function cloudIdentityFor(request: Request) {
   const user = await authenticatedUser(request)
   if (!user) {
+    return null
+  }
+
+  const client = serviceClient()
+  const { data: mapping, error } = await client
+    .from('project_xp_cloud_accounts')
+    .select('project_xp_user_id')
+    .eq('auth_user_id', user.id)
+    .maybeSingle()
+
+  const projectXpUserId =
+    String(mapping?.project_xp_user_id ?? '').trim()
+
+  if (error || !projectXpUserId) {
+    return null
+  }
+
+  return {
+    user,
+    projectXpUserId,
+    client,
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Chiffrement des jetons plateformes
+// -----------------------------------------------------------------------------
+// Le SUPABASE_SERVICE_ROLE_KEY est déjà un secret serveur de forte entropie.
+// On en dérive une clé AES dédiée au stockage des jetons PlayStation.
+// Aucun secret PlayStation n'est lisible par le client Flutter.
+
+async function platformEncryptionKey() {
+  const serviceRole = env('SUPABASE_SERVICE_ROLE_KEY')
+  if (!serviceRole) {
+    throw new Error('Clé serveur Supabase absente.')
+  }
+
+  const material = new TextEncoder().encode(
+    `project-xp|platform-credential|v1|${serviceRole}`,
+  )
+  const digest = await crypto.subtle.digest('SHA-256', material)
+
+  return await crypto.subtle.importKey(
+    'raw',
+    digest,
+    { name: 'AES-GCM' },
+    false,
+    ['encrypt', 'decrypt'],
+  )
+}
+
+function bytesToBase64(bytes: Uint8Array) {
+  let binary = ''
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte)
+  }
+  return btoa(binary)
+}
+
+async function encryptPlatformSecret(value: string) {
+  const key = await platformEncryptionKey()
+  const iv = crypto.getRandomValues(new Uint8Array(12))
+  const encrypted = await crypto.subtle.encrypt(
+    {
+      name: 'AES-GCM',
+      iv,
+    },
+    key,
+    new TextEncoder().encode(value),
+  )
+
+  return {
+    cipherText: bytesToBase64(new Uint8Array(encrypted)),
+    iv: bytesToBase64(iv),
+  }
+}
+
+// -----------------------------------------------------------------------------
+// STEAM
+// -----------------------------------------------------------------------------
+
+async function startSteam(request: Request) {
+  const identity = await cloudIdentityFor(request)
+  if (!identity) {
     return jsonResponse(
       {
         ok: false,
@@ -78,26 +168,7 @@ async function startSteam(request: Request) {
     )
   }
 
-  const client = serviceClient()
-  const { data: mapping, error: mappingError } = await client
-    .from('project_xp_cloud_accounts')
-    .select('project_xp_user_id')
-    .eq('auth_user_id', user.id)
-    .maybeSingle()
-
-  const projectXpUserId =
-    String(mapping?.project_xp_user_id ?? '').trim()
-
-  if (mappingError || !projectXpUserId) {
-    return jsonResponse(
-      {
-        ok: false,
-        error:
-          'Le compte Cloud Project XP doit être finalisé avant de lier Steam.',
-      },
-      409,
-    )
-  }
+  const { user, projectXpUserId, client } = identity
 
   const flowId = crypto.randomUUID()
   const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString()
@@ -332,6 +403,298 @@ async function steamCallback(url: URL) {
   })
 }
 
+// -----------------------------------------------------------------------------
+// PLAYSTATION
+// -----------------------------------------------------------------------------
+
+function firstAvatarUrl(profile: JsonRecord) {
+  const avatarUrls = profile.avatarUrls
+  if (!Array.isArray(avatarUrls)) {
+    return ''
+  }
+
+  for (let index = avatarUrls.length - 1; index >= 0; index -= 1) {
+    const item = avatarUrls[index]
+    if (item && typeof item === 'object') {
+      const value = String((item as JsonRecord).avatarUrl ?? '').trim()
+      if (value) {
+        return value.replace(/^http:\/\//, 'https://')
+      }
+    }
+  }
+
+  return ''
+}
+
+async function linkPlayStation(request: Request, body: JsonRecord) {
+  const identity = await cloudIdentityFor(request)
+  if (!identity) {
+    return jsonResponse(
+      {
+        ok: false,
+        error:
+          'Un compte Cloud Project XP actif est nécessaire pour lier PlayStation.',
+      },
+      401,
+    )
+  }
+
+  const onlineId = String(body.onlineId ?? '').trim()
+  const npsso = String(body.npsso ?? '').trim()
+
+  if (onlineId.length < 3 || onlineId.length > 32) {
+    return jsonResponse(
+      {
+        ok: false,
+        error: 'Identifiant PlayStation invalide.',
+      },
+      400,
+    )
+  }
+
+  if (npsso.length < 32 || npsso.length > 512) {
+    return jsonResponse(
+      {
+        ok: false,
+        error: 'Jeton NPSSO PlayStation invalide.',
+      },
+      400,
+    )
+  }
+
+  const { user, projectXpUserId, client } = identity
+
+  try {
+    const accessCode = await exchangeNpssoForAccessCode(npsso)
+    const authorization =
+      await exchangeAccessCodeForAuthTokens(accessCode)
+
+    const accessToken =
+      String(authorization.accessToken ?? '').trim()
+    const refreshToken =
+      String(authorization.refreshToken ?? '').trim()
+
+    if (!accessToken || !refreshToken) {
+      return jsonResponse(
+        {
+          ok: false,
+          error:
+            'PlayStation n’a pas fourni de session renouvelable. Génère un nouveau NPSSO puis réessaie.',
+        },
+        401,
+      )
+    }
+
+    // Valide la session sur le compte authentifié sans conserver le NPSSO.
+    await getUserTitles(
+      { accessToken },
+      'me',
+      { limit: 1 },
+    )
+
+    const profileResponse =
+      await getProfileFromUserName(
+        { accessToken },
+        onlineId,
+      ) as unknown as JsonRecord
+
+    const profileRaw = profileResponse.profile
+    if (!profileRaw || typeof profileRaw !== 'object') {
+      return jsonResponse(
+        {
+          ok: false,
+          error:
+            'PlayStation n’a pas pu retrouver ce profil. Vérifie ton identifiant PSN.',
+        },
+        404,
+      )
+    }
+
+    const profile = profileRaw as JsonRecord
+    const returnedOnlineId =
+      String(profile.onlineId ?? '').trim()
+    const accountId =
+      String(profile.accountId ?? '').trim()
+
+    if (!accountId || !returnedOnlineId) {
+      return jsonResponse(
+        {
+          ok: false,
+          error:
+            'Le profil PlayStation ne contient pas les informations nécessaires.',
+        },
+        502,
+      )
+    }
+
+    if (returnedOnlineId.toLowerCase() !== onlineId.toLowerCase()) {
+      return jsonResponse(
+        {
+          ok: false,
+          error:
+            'Le profil PlayStation retourné ne correspond pas à l’identifiant saisi.',
+        },
+        409,
+      )
+    }
+
+    const avatarUrl = firstAvatarUrl(profile)
+    const now = new Date().toISOString()
+
+    const { error: accountError } = await client
+      .from('project_xp_platform_accounts')
+      .upsert(
+        {
+          auth_user_id: user.id,
+          project_xp_user_id: projectXpUserId,
+          provider: 'playstation',
+          provider_user_id: accountId,
+          display_name: returnedOnlineId,
+          avatar_url: avatarUrl || null,
+          linked_at: now,
+          updated_at: now,
+        },
+        { onConflict: 'auth_user_id,provider' },
+      )
+
+    if (accountError) {
+      const conflict = accountError.code === '23505'
+      return jsonResponse(
+        {
+          ok: false,
+          error: conflict
+            ? 'Ce compte PlayStation est déjà lié à un autre compte Project XP.'
+            : 'Impossible d’enregistrer le compte PlayStation.',
+        },
+        conflict ? 409 : 502,
+      )
+    }
+
+    const encrypted = await encryptPlatformSecret(refreshToken)
+    const refreshSeconds = Number(
+      authorization.refreshTokenExpiresIn ?? 0,
+    )
+    const expiresAt = Number.isFinite(refreshSeconds) &&
+        refreshSeconds > 0
+      ? new Date(Date.now() + refreshSeconds * 1000).toISOString()
+      : null
+
+    const { error: credentialError } = await client
+      .from('project_xp_platform_credentials')
+      .upsert(
+        {
+          auth_user_id: user.id,
+          provider: 'playstation',
+          secret_ciphertext: encrypted.cipherText,
+          secret_iv: encrypted.iv,
+          expires_at: expiresAt,
+          updated_at: now,
+        },
+        { onConflict: 'auth_user_id,provider' },
+      )
+
+    if (credentialError) {
+      await client
+        .from('project_xp_platform_accounts')
+        .delete()
+        .eq('auth_user_id', user.id)
+        .eq('provider', 'playstation')
+
+      throw new Error(
+        `Stockage sécurisé PlayStation impossible : ${credentialError.message}`,
+      )
+    }
+
+    return jsonResponse({
+      ok: true,
+      provider: 'playstation',
+      account: {
+        provider: 'playstation',
+        provider_user_id: accountId,
+        display_name: returnedOnlineId,
+        avatar_url: avatarUrl || null,
+        linked_at: now,
+        updated_at: now,
+      },
+    })
+  } catch (error) {
+    const message = error instanceof Error
+      ? error.message
+      : String(error)
+
+    const lower = message.toLowerCase()
+
+    if (
+      lower.includes('npsso') ||
+      lower.includes('access code') ||
+      lower.includes('unauthorized') ||
+      lower.includes('401')
+    ) {
+      return jsonResponse(
+        {
+          ok: false,
+          error:
+            'Le jeton PlayStation n’est plus valide. Connecte-toi à PlayStation, génère un nouveau NPSSO puis réessaie.',
+        },
+        401,
+      )
+    }
+
+    return jsonResponse(
+      {
+        ok: false,
+        error:
+          'PlayStation n’a pas pu confirmer la liaison pour le moment.',
+      },
+      502,
+    )
+  }
+}
+
+async function unlinkPlayStation(request: Request) {
+  const user = await authenticatedUser(request)
+  if (!user) {
+    return jsonResponse(
+      {
+        ok: false,
+        error: 'Aucun compte Cloud Project XP actif.',
+      },
+      401,
+    )
+  }
+
+  const client = serviceClient()
+
+  const { error: credentialError } = await client
+    .from('project_xp_platform_credentials')
+    .delete()
+    .eq('auth_user_id', user.id)
+    .eq('provider', 'playstation')
+
+  if (credentialError) {
+    throw new Error(
+      `Suppression du jeton PlayStation impossible : ${credentialError.message}`,
+    )
+  }
+
+  const { error: accountError } = await client
+    .from('project_xp_platform_accounts')
+    .delete()
+    .eq('auth_user_id', user.id)
+    .eq('provider', 'playstation')
+
+  if (accountError) {
+    throw new Error(
+      `Suppression du compte PlayStation impossible : ${accountError.message}`,
+    )
+  }
+
+  return jsonResponse({
+    ok: true,
+    provider: 'playstation',
+  })
+}
+
 serve(async (request) => {
   if (request.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
@@ -340,7 +703,10 @@ serve(async (request) => {
   try {
     const url = new URL(request.url)
 
-    if (request.method === 'GET' && url.searchParams.get('callback') === 'steam') {
+    if (
+      request.method === 'GET' &&
+      url.searchParams.get('callback') === 'steam'
+    ) {
       return await steamCallback(url)
     }
 
@@ -356,6 +722,14 @@ serve(async (request) => {
 
     if (action === 'steam_start') {
       return await startSteam(request)
+    }
+
+    if (action === 'playstation_link') {
+      return await linkPlayStation(request, body)
+    }
+
+    if (action === 'playstation_unlink') {
+      return await unlinkPlayStation(request)
     }
 
     return jsonResponse(

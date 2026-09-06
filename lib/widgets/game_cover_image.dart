@@ -5,10 +5,9 @@ import '../services/game_cover_repair_service.dart';
 
 /// Affiche la meilleure jaquette connue d'un jeu.
 ///
-/// V1.10.3a : si toutes les vraies covers Steam/catalogue échouent, Project XP
-/// lance une recherche IGDB ciblée pour CE jeu uniquement. La nouvelle cover
-/// apparaît dès qu'elle est trouvée et reste ensuite enregistrée dans la
-/// Bibliothèque Cloud.
+/// Les covers Steam sont construites directement depuis l'AppID et ne
+/// dépendent jamais de la synchronisation des succès. Si tous les assets Steam
+/// disponibles échouent, Project XP tente ensuite une réparation IGDB ciblée.
 class GameCoverImage extends StatefulWidget {
   final GameLibraryEntry game;
   final double? width;
@@ -26,8 +25,7 @@ class GameCoverImage extends StatefulWidget {
   });
 
   @override
-  State<GameCoverImage> createState() =>
-      _GameCoverImageState();
+  State<GameCoverImage> createState() => _GameCoverImageState();
 }
 
 class _GameCoverImageState extends State<GameCoverImage> {
@@ -35,9 +33,7 @@ class _GameCoverImageState extends State<GameCoverImage> {
   String? _repairedUrl;
 
   @override
-  void didUpdateWidget(
-    covariant GameCoverImage oldWidget,
-  ) {
+  void didUpdateWidget(covariant GameCoverImage oldWidget) {
     super.didUpdateWidget(oldWidget);
 
     if (oldWidget.game.id != widget.game.id) {
@@ -49,35 +45,58 @@ class _GameCoverImageState extends State<GameCoverImage> {
   @override
   Widget build(BuildContext context) {
     final List<String> candidates = <String>[
-      if ((_repairedUrl?.trim().isNotEmpty ?? false))
-        _repairedUrl!.trim(),
+      if ((_repairedUrl?.trim().isNotEmpty ?? false)) _repairedUrl!.trim(),
       ...widget.game.coverCandidates,
+      ..._steamCoverCandidates(widget.game),
     ]
         .where((url) => !_isLowQualityCover(url))
         .toSet()
         .toList();
 
-    return _candidate(
-      candidates,
-      0,
-    );
+    return _candidate(candidates, 0);
+  }
+
+  List<String> _steamCoverCandidates(GameLibraryEntry game) {
+    final String appId =
+        game.platformProfile(GamePlatform.steam)?.externalId?.trim() ??
+        (game.platform == GamePlatform.steam
+            ? game.externalId?.trim() ?? ''
+            : '');
+
+    if (appId.isEmpty) {
+      return const <String>[];
+    }
+
+    return <String>[
+      'https://shared.fastly.steamstatic.com/store_item_assets/'
+          'steam/apps/$appId/library_600x900_2x.jpg',
+      'https://shared.cloudflare.steamstatic.com/store_item_assets/'
+          'steam/apps/$appId/library_600x900_2x.jpg',
+      'https://steamcdn-a.akamaihd.net/steam/apps/'
+          '$appId/library_600x900_2x.jpg',
+      'https://cdn.akamai.steamstatic.com/steam/apps/'
+          '$appId/library_600x900_2x.jpg',
+      'https://shared.fastly.steamstatic.com/store_item_assets/'
+          'steam/apps/$appId/library_600x900.jpg',
+      'https://shared.cloudflare.steamstatic.com/store_item_assets/'
+          'steam/apps/$appId/library_600x900.jpg',
+      'https://steamcdn-a.akamaihd.net/steam/apps/'
+          '$appId/library_600x900.jpg',
+      'https://cdn.akamai.steamstatic.com/steam/apps/'
+          '$appId/library_600x900.jpg',
+    ];
   }
 
   bool _isLowQualityCover(String raw) {
     final String url = raw.toLowerCase();
 
     return url.contains('/public/images/apps/') ||
-        url.contains(
-          'steamcommunity/public/images/apps/',
-        ) ||
+        url.contains('steamcommunity/public/images/apps/') ||
         url.contains('img_icon_url') ||
         url.endsWith('/header.jpg');
   }
 
-  Widget _candidate(
-    List<String> candidates,
-    int index,
-  ) {
+  Widget _candidate(List<String> candidates, int index) {
     if (index >= candidates.length) {
       _requestRepairOnce();
       return _fallback();
@@ -89,15 +108,8 @@ class _GameCoverImageState extends State<GameCoverImage> {
       height: widget.height,
       fit: widget.fit,
       filterQuality: FilterQuality.high,
-      errorBuilder: (
-        context,
-        error,
-        stackTrace,
-      ) {
-        return _candidate(
-          candidates,
-          index + 1,
-        );
+      errorBuilder: (context, error, stackTrace) {
+        return _candidate(candidates, index + 1);
       },
     );
   }
@@ -109,34 +121,25 @@ class _GameCoverImageState extends State<GameCoverImage> {
 
     _repairRequested = true;
 
-    WidgetsBinding.instance.addPostFrameCallback(
-      (_) async {
-        final String? url =
-            await GameCoverRepairService.requestRepair(
-          widget.game,
-        );
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final String? url = await GameCoverRepairService.requestRepair(
+        widget.game,
+      );
 
-        if (!mounted ||
-            url == null ||
-            url.trim().isEmpty) {
-          return;
-        }
+      if (!mounted || url == null || url.trim().isEmpty) {
+        return;
+      }
 
-        setState(() {
-          _repairedUrl = url.trim();
-        });
-      },
-    );
+      setState(() {
+        _repairedUrl = url.trim();
+      });
+    });
   }
 
   Widget _fallback() {
-    final String initial =
-        widget.game.title.trim().isEmpty
-            ? '?'
-            : widget.game.title
-                .trim()
-                .substring(0, 1)
-                .toUpperCase();
+    final String initial = widget.game.title.trim().isEmpty
+        ? '?'
+        : widget.game.title.trim().substring(0, 1).toUpperCase();
 
     return Container(
       width: widget.width,

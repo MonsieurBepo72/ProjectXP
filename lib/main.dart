@@ -1,4 +1,4 @@
-﻿import 'dart:async';
+import 'dart:async';
 
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
@@ -43,9 +43,16 @@ Future<void> main() async {
   // Supabase reste une dépendance critique : auth, profils et social
   // reposent dessus. Une configuration Supabase invalide doit donc rester
   // visible immédiatement au développement au lieu d'être masquée.
+  //
+  // Les callbacks Auth sont gérés explicitement dans AuthScreen. Cela évite
+  // qu'un lien PKCE de récupération soit consommé avant que l'écran de login
+  // puisse échanger son code lors d'un démarrage à froid.
   await Supabase.initialize(
     url: SupabaseConfig.url,
     publishableKey: SupabaseConfig.publishableKey,
+    authOptions: const FlutterAuthClientOptions(
+      detectSessionInUri: false,
+    ),
   );
 
   await Future.wait<void>(

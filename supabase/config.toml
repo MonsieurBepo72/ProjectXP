@@ -14,9 +14,13 @@ verify_jwt = true
 [functions.steam-sync]
 verify_jwt = true
 
+[functions.playstation-sync]
+verify_jwt = true
+
 # Cette fonction reçoit le callback OpenID Steam depuis le navigateur.
 # Le démarrage du flux vérifie déjà le Bearer token dans le code et le callback
 # est validé côté serveur contre Steam + le flow temporaire stocké en base.
+# La liaison PlayStation passe elle aussi par un Bearer token vérifié dans le code.
 [functions.platform-auth]
 verify_jwt = false
 

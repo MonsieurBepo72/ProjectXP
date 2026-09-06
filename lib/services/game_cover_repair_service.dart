@@ -16,8 +16,10 @@ import 'game_library_service.dart';
 class GameCoverRepairService {
   GameCoverRepairService._();
 
+  // V3 : retente les anciennes covers manquantes avec plusieurs variantes
+  // de recherche IGDB, sans dépendre de la synchro des succès Steam.
   static const String _failurePrefix =
-      'project_xp_cover_repair_failure_v1_';
+      'project_xp_cover_repair_failure_v3_';
 
   static const Duration _failureCooldown =
       Duration(hours: 12);
@@ -96,34 +98,58 @@ class GameCoverRepairService {
       }
     }
 
-    final List<GameCatalogResult> results =
-        await GameCatalogService.searchGames(
-      game.title,
+    final List<String> queries = <String>[game.title.trim()];
+    final String simplified = _editionAgnosticTitle(
+      _canonicalTitle(game.title),
     );
+    if (simplified.length >= 2 &&
+        simplified.toLowerCase() != game.title.trim().toLowerCase()) {
+      queries.add(simplified);
+    }
 
-    final String target =
-        _canonicalTitle(game.title);
+    final Map<String, GameCatalogResult> resultById =
+        <String, GameCatalogResult>{};
 
-    final List<GameCatalogResult> exact = results
+    for (final String query in queries) {
+      final List<GameCatalogResult> results =
+          await GameCatalogService.searchGames(query);
+      for (final GameCatalogResult result in results) {
+        resultById[result.id] = result;
+      }
+
+      final bool alreadyHasSafeCandidate = resultById.values.any(
+        (result) =>
+            (result.coverUrl?.trim().isNotEmpty ?? false) &&
+            _titleMatchScore(game.title, result.title) >= 80,
+      );
+      if (alreadyHasSafeCandidate) {
+        break;
+      }
+    }
+
+    // On accepte les variantes sûres de type Deluxe / Definitive /
+    // Remastered / GOTY, tout en gardant un seuil strict pour éviter les
+    // mauvaises jaquettes.
+    final List<GameCatalogResult> candidates = resultById.values
         .where(
           (result) =>
-              _canonicalTitle(result.title) == target &&
-              (result.coverUrl?.trim().isNotEmpty ?? false),
+              (result.coverUrl?.trim().isNotEmpty ?? false) &&
+              _titleMatchScore(game.title, result.title) >= 80,
         )
         .toList();
 
-    if (exact.isEmpty) {
+    if (candidates.isEmpty) {
       await _rememberFailure(game.id);
       return null;
     }
 
-    exact.sort(
+    candidates.sort(
       (a, b) => _score(b, game).compareTo(
         _score(a, game),
       ),
     );
 
-    final GameCatalogResult best = exact.first;
+    final GameCatalogResult best = candidates.first;
     final String cover =
         best.coverUrl?.trim() ?? '';
 
@@ -146,7 +172,8 @@ class GameCoverRepairService {
     await prefs.remove(failureKey);
 
     debugPrint(
-      'Cover IGDB réparée automatiquement : ${game.title}',
+      'Cover IGDB réparée automatiquement : ${game.title} '
+      '→ ${best.title}',
     );
 
     return cover;
@@ -156,7 +183,12 @@ class GameCoverRepairService {
     GameCatalogResult result,
     GameLibraryEntry game,
   ) {
-    int score = 10;
+    // Le titre reste le critère dominant. Le score de titre est multiplié
+    // pour éviter qu'une année ou une plateforme ne fasse gagner un faux match.
+    int score = _titleMatchScore(
+      game.title,
+      result.title,
+    ) * 10;
 
     final int? expectedYear = game.releaseYear;
     final int? resultYear = result.releaseYear;
@@ -191,6 +223,107 @@ class GameCoverRepairService {
     }
 
     return score;
+  }
+
+  static int _titleMatchScore(
+    String expected,
+    String candidate,
+  ) {
+    final String a = _canonicalTitle(expected);
+    final String b = _canonicalTitle(candidate);
+
+    if (a.isEmpty || b.isEmpty) {
+      return 0;
+    }
+
+    if (a == b) {
+      return 100;
+    }
+
+    final String editionA = _editionAgnosticTitle(a);
+    final String editionB = _editionAgnosticTitle(b);
+
+    if (editionA.isNotEmpty &&
+        editionA == editionB) {
+      return 96;
+    }
+
+    final Set<String> aTokens =
+        _meaningfulTokens(editionA);
+    final Set<String> bTokens =
+        _meaningfulTokens(editionB);
+
+    if (aTokens.isEmpty || bTokens.isEmpty) {
+      return 0;
+    }
+
+    final Set<String> intersection =
+        aTokens.intersection(bTokens);
+    final Set<String> union =
+        aTokens.union(bTokens);
+
+    final double overlap =
+        intersection.length / union.length;
+
+    // 80 % ou plus : le résultat IGDB est suffisamment proche pour une
+    // réparation automatique. En dessous, on préfère laisser la cover vide
+    // plutôt que d'associer le mauvais jeu.
+    if (overlap >= 0.90) {
+      return 92;
+    }
+    if (overlap >= 0.80) {
+      return 86;
+    }
+
+    return (overlap * 100).round();
+  }
+
+  static String _editionAgnosticTitle(String raw) {
+    String value = raw
+        .replaceAll(
+          RegExp(r'\bgame of the year\b'),
+          ' ',
+        );
+
+    const Set<String> editionNoise = <String>{
+      'edition',
+      'deluxe',
+      'ultimate',
+      'complete',
+      'definitive',
+      'remastered',
+      'remaster',
+      'enhanced',
+      'anniversary',
+      'collection',
+      'bundle',
+      'digital',
+      'standard',
+      'goty',
+    };
+
+    value = value
+        .split(' ')
+        .where(
+          (token) =>
+              token.isNotEmpty &&
+              !editionNoise.contains(token),
+        )
+        .join(' ');
+
+    return value
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+  }
+
+  static Set<String> _meaningfulTokens(
+    String raw,
+  ) {
+    return raw
+        .split(' ')
+        .map((token) => token.trim())
+        .where((token) => token.isNotEmpty)
+        .toSet();
   }
 
   static String _canonicalTitle(String raw) {

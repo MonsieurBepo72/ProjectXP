@@ -6,12 +6,12 @@ import 'app_audio_service.dart';
 import 'app_notification_service.dart';
 import 'auth_service.dart';
 import 'cloud_data_sync_service.dart';
+import 'cloud_session_guard_service.dart';
 import 'gaming_accounts_service.dart';
+import 'gaming_sync_service.dart';
 import 'computer_settings_service.dart';
 import 'local_account_repair_service.dart';
 import 'push_device_token_service.dart';
-import 'supabase_service.dart';
-import 'steam_sync_service.dart';
 import 'tavern_profile_service.dart';
 
 class ProjectXpStartupService {
@@ -26,6 +26,7 @@ class ProjectXpStartupService {
   );
 
   Future<void>? _startFuture;
+  Future<void>? _accountResumeFuture;
 
   final Completer<void> _localReadyCompleter =
       Completer<void>();
@@ -169,6 +170,99 @@ class ProjectXpStartupService {
       return;
     }
 
+    // Étape 04A.1 : une session Supabase peut exister même lorsque l'écran
+    // Project XP est déconnecté. Les synchronisations personnelles ne doivent
+    // jamais utiliser l'ID local conservé en cache dans ce cas.
+    if (!await AuthService.isLoggedIn()) {
+      return;
+    }
+
+    await _syncAuthenticatedAccount(
+      notificationFuture: notificationFuture,
+    );
+  }
+
+  /// Réinitialise uniquement l'état social en mémoire lors d'un logout local.
+  /// Le service global reste one-shot, mais le prochain login doit republier
+  /// une révision sociale pour le compte correctement réaligné.
+  void notifyLocalLogout() {
+    _socialReady = false;
+  }
+
+  /// Relance uniquement les tâches liées au compte après une authentification
+  /// locale effectuée sans redémarrer le processus de l'application.
+  ///
+  /// `start()` reste volontairement one-shot. Cette méthode évite donc qu'un
+  /// logout/login laisse le nouveau compte sans réenregistrement FCM ni refresh
+  /// de ses données, tout en gardant les mêmes garde-fous qu'au démarrage.
+  Future<void> resumeAfterLocalAuthentication() {
+    final Future<void>? active = _accountResumeFuture;
+
+    if (active != null) {
+      return active;
+    }
+
+    final Future<void> task =
+        _resumeAfterLocalAuthenticationInternal();
+
+    _accountResumeFuture = task;
+
+    return task.whenComplete(() {
+      if (identical(_accountResumeFuture, task)) {
+        _accountResumeFuture = null;
+      }
+    });
+  }
+
+  Future<void> _resumeAfterLocalAuthenticationInternal() async {
+    try {
+      if (!await AuthService.isLoggedIn()) {
+        return;
+      }
+
+      final bool aligned =
+          await CloudSessionGuardService
+              .ensureAlignedSessionWithoutPassword();
+
+      if (!aligned) {
+        return;
+      }
+
+      _markSocialReady();
+
+      final Future<void> notificationFuture =
+          _safeStep(
+        'Notifications',
+        AppNotificationService.instance.initialize,
+      );
+
+      await _syncAuthenticatedAccount(
+        notificationFuture: notificationFuture,
+      );
+    } catch (error) {
+      debugPrint(
+        'Reprise session Project XP non bloquante échouée : $error',
+      );
+    }
+  }
+
+  Future<void> _syncAuthenticatedAccount({
+    required Future<void> notificationFuture,
+  }) async {
+    if (!await AuthService.isLoggedIn()) {
+      return;
+    }
+
+    // Défense en profondeur : même si une ancienne tentative sociale avait déjà
+    // marqué le processus comme prêt, on revérifie l'identité Supabase juste
+    // avant toute tâche personnelle Cloud / gaming / push.
+    final bool aligned =
+        await CloudSessionGuardService.ensureAlignedSessionWithoutPassword();
+
+    if (!aligned || !await AuthService.isLoggedIn()) {
+      return;
+    }
+
     // V1.10 : si le compte Supabase est permanent, on restaure / migre les
     // données personnelles en arrière-plan AVANT de republier le profil social.
     await _safeStep(
@@ -176,17 +270,30 @@ class ProjectXpStartupService {
       CloudDataSyncService.syncCurrentAccount,
     );
 
+    if (!await AuthService.isLoggedIn()) {
+      return;
+    }
+
     // La synchronisation gaming démarre en arrière-plan une fois la
     // Bibliothèque Cloud restaurée. Elle ne fait jamais attendre le Hall.
     unawaited(
       _safeStep(
         'Synchronisation gaming',
-        SteamSyncService.syncAtStartup,
+        GamingSyncService.syncAtStartup,
       ),
     );
 
     await notificationFuture;
+
+    if (!await AuthService.isLoggedIn()) {
+      return;
+    }
+
     await _refreshPushTokenRegistration();
+
+    if (!await AuthService.isLoggedIn()) {
+      return;
+    }
 
     await _safeStep(
       'Profil public',
@@ -195,17 +302,14 @@ class ProjectXpStartupService {
   }
 
   Future<bool> _tryInitializeSocialSession() async {
-    if (_socialReady) {
-      return true;
-    }
-
     try {
-      final user =
-          await SupabaseService.ensureAnonymousSession();
+      if (!await AuthService.isLoggedIn()) {
+        return false;
+      }
 
       final bool ready =
-          user != null ||
-              SupabaseService.currentUser != null;
+          await CloudSessionGuardService
+              .ensureAlignedSessionWithoutPassword();
 
       if (ready) {
         _markSocialReady();
@@ -233,6 +337,10 @@ class ProjectXpStartupService {
 
   Future<void> _refreshPushTokenRegistration() async {
     try {
+      if (!await AuthService.isLoggedIn()) {
+        return;
+      }
+
       final String? token =
           await AppNotificationService
               .instance
@@ -241,7 +349,8 @@ class ProjectXpStartupService {
       final String cleanToken =
           token?.trim() ?? '';
 
-      if (cleanToken.isEmpty) {
+      if (cleanToken.isEmpty ||
+          !await AuthService.isLoggedIn()) {
         return;
       }
 
@@ -256,6 +365,10 @@ class ProjectXpStartupService {
   }
 
   Future<void> _syncTavernProfile() async {
+    if (!await AuthService.isLoggedIn()) {
+      return;
+    }
+
     final bool profileSynced =
         await TavernProfileService.syncCurrentProfile();
 

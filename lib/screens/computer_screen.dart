@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import 'package:project_xp/models/avatar_model.dart';
@@ -12,11 +14,14 @@ import 'package:project_xp/services/biometric_auth_service.dart';
 import 'package:project_xp/services/cloud_identity_service.dart';
 import 'package:project_xp/services/computer_settings_service.dart';
 import 'package:project_xp/services/game_library_service.dart';
+import 'package:project_xp/services/gaming_sync_service.dart';
+import 'package:project_xp/services/project_xp_high_fact_service.dart';
 import 'package:project_xp/services/session_service.dart';
 import 'package:project_xp/services/steam_sync_service.dart';
 
 import '../widgets/avatar_renderer.dart';
 import '../widgets/hall_home_button.dart';
+import '../widgets/steam_library_sync_progress.dart';
 
 class ComputerScreen extends StatefulWidget {
   const ComputerScreen({super.key});
@@ -43,18 +48,22 @@ class _ComputerScreenState extends State<ComputerScreen> {
   List<GamingActivityEvent> _activity = <GamingActivityEvent>[];
 
   SteamSyncPhase? _lastSteamSyncPhase;
+  GamingSyncPhase? _lastGamingSyncPhase;
 
   @override
   void initState() {
     super.initState();
     SteamSyncService.syncState.addListener(_handleSteamSyncState);
+    GamingSyncService.syncState.addListener(_handleGamingSyncState);
     _lastSteamSyncPhase = SteamSyncService.syncState.value.phase;
+    _lastGamingSyncPhase = GamingSyncService.syncState.value.phase;
     _loadData();
   }
 
   @override
   void dispose() {
     SteamSyncService.syncState.removeListener(_handleSteamSyncState);
+    GamingSyncService.syncState.removeListener(_handleGamingSyncState);
     super.dispose();
   }
 
@@ -64,6 +73,18 @@ class _ComputerScreenState extends State<ComputerScreen> {
         phase == SteamSyncPhase.completed &&
         _lastSteamSyncPhase != SteamSyncPhase.completed;
     _lastSteamSyncPhase = phase;
+
+    if (justCompleted) {
+      _reloadGamingData();
+    }
+  }
+
+  void _handleGamingSyncState() {
+    final GamingSyncPhase phase = GamingSyncService.syncState.value.phase;
+    final bool justCompleted =
+        phase == GamingSyncPhase.completed &&
+        _lastGamingSyncPhase != GamingSyncPhase.completed;
+    _lastGamingSyncPhase = phase;
 
     if (justCompleted) {
       _reloadGamingData();
@@ -214,9 +235,7 @@ class _ComputerScreenState extends State<ComputerScreen> {
       return;
     }
 
-    await CloudIdentityService.signOutPermanentCloudUser();
-
-    await SessionService.logout();
+    await SessionService.lock();
 
     if (!mounted) {
       return;
@@ -1371,7 +1390,7 @@ class _ComputerScreenState extends State<ComputerScreen> {
                   games: _games,
                   activity: _activity,
                   onSettings: _openControlCenter,
-                  onReload: _loadData,
+                  onReload: _reloadGamingData,
                   onGamingDataChanged: _reloadGamingData,
                   onQuestTap: () {
                     _showPortalComingSoon('Les quêtes');
@@ -1432,6 +1451,13 @@ class _PortalBrowserState extends State<_PortalBrowser> {
     const _PortalLocation.home(),
   ];
   int _historyIndex = 0;
+  int _reloadGeneration = 0;
+
+  String _libraryQuery = '';
+  GameStatus? _libraryStatus;
+  bool _libraryFavoriteOnly = false;
+  _PortalLibrarySort _librarySort = _PortalLibrarySort.recent;
+  GamePlatform? _libraryPlatform;
 
   _PortalLocation get _location => _history[_historyIndex];
   bool get _canGoBack => _historyIndex > 0;
@@ -1465,6 +1491,19 @@ class _PortalBrowserState extends State<_PortalBrowser> {
       return;
     }
     setState(() => _historyIndex += 1);
+  }
+
+  Future<void> _reloadCurrentPage() async {
+    // Le bouton du navigateur recharge uniquement les données locales déjà
+    // enregistrées. Il ne déclenche volontairement aucune synchronisation de
+    // plateforme : SYNCHRO reste la seule action qui contacte Steam/PSN.
+    await widget.onReload();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _reloadGeneration += 1;
+    });
   }
 
   GameLibraryEntry? _gameById(String? id) {
@@ -1531,6 +1570,20 @@ class _PortalBrowserState extends State<_PortalBrowser> {
     _navigate(_PortalLocation.game(game.id));
   }
 
+  void _rememberLibraryView(
+    String query,
+    GameStatus? status,
+    bool favoriteOnly,
+    _PortalLibrarySort sort,
+    GamePlatform? platform,
+  ) {
+    _libraryQuery = query;
+    _libraryStatus = status;
+    _libraryFavoriteOnly = favoriteOnly;
+    _librarySort = sort;
+    _libraryPlatform = platform;
+  }
+
   void _switchGame(GameLibraryEntry current, int delta) {
     final int index = widget.games.indexWhere((game) => game.id == current.id);
     if (index < 0) {
@@ -1549,8 +1602,15 @@ class _PortalBrowserState extends State<_PortalBrowser> {
   }
 
   Future<void> _setStatus(GameLibraryEntry game, GameStatus status) async {
-    await GameLibraryService.updateGame(game.copyWith(status: status));
+    await GameLibraryService.updateGame(
+      game.copyWith(
+        status: status,
+        statusAutomatic: false,
+        personalUpdatedAt: DateTime.now(),
+      ),
+    );
     await widget.onGamingDataChanged();
+    unawaited(ProjectXpHighFactService.publishNewHighFacts());
   }
 
   Widget _buildPage() {
@@ -1567,15 +1627,22 @@ class _PortalBrowserState extends State<_PortalBrowser> {
           onQuestTap: widget.onQuestTap,
         );
       case _PortalRouteKind.profile:
-        return const ProfileScreen(
-          key: ValueKey<String>('projectxp-profile-web'),
+        return ProfileScreen(
+          key: const ValueKey<String>('projectxp-profile-web'),
           embedded: true,
+          onOpenGame: _openGame,
         );
       case _PortalRouteKind.library:
         return _PortalLibraryPage(
           games: widget.games,
           onOpenGame: _openGame,
           onDataChanged: widget.onGamingDataChanged,
+          initialQuery: _libraryQuery,
+          initialStatus: _libraryStatus,
+          initialFavoriteOnly: _libraryFavoriteOnly,
+          initialSort: _librarySort,
+          initialPlatform: _libraryPlatform,
+          onViewChanged: _rememberLibraryView,
         );
       case _PortalRouteKind.game:
         final GameLibraryEntry? game = _gameById(_location.gameId);
@@ -1635,7 +1702,7 @@ class _PortalBrowserState extends State<_PortalBrowser> {
               onForward: _goForward,
               onHome: () => _navigate(const _PortalLocation.home()),
               onSettings: widget.onSettings,
-              onReload: widget.onReload,
+              onReload: _reloadCurrentPage,
             ),
             Expanded(
               child: AnimatedSwitcher(
@@ -1643,7 +1710,7 @@ class _PortalBrowserState extends State<_PortalBrowser> {
                 switchInCurve: Curves.easeOut,
                 switchOutCurve: Curves.easeIn,
                 child: KeyedSubtree(
-                  key: ValueKey<String>(_address),
+                  key: ValueKey<String>('$_address#$_reloadGeneration'),
                   child: _buildPage(),
                 ),
               ),
@@ -1807,7 +1874,6 @@ class _PortalHomePage extends StatelessWidget {
     }
 
     final GameLibraryEntry? selectedGame = currentGame;
-    final int? completion = selectedGame?.bestCompletionPercent;
 
     return Container(
       decoration: const BoxDecoration(
@@ -1848,9 +1914,8 @@ class _PortalHomePage extends StatelessWidget {
                     value: selectedGame?.title ?? 'Aucun jeu en cours',
                     subtitle: selectedGame == null
                         ? 'Choisis une aventure dans ta Bibliothèque'
-                        : completion == null
-                        ? '${selectedGame.platform.label} • Progression non synchronisée'
-                        : '${selectedGame.platform.label} • $completion %',
+                        : '${_libraryPlatformText(selectedGame)} • '
+                              '${_libraryProgressText(selectedGame)}',
                     onTap: selectedGame == null
                         ? onLibrary
                         : () => onGame(selectedGame),
@@ -2188,11 +2253,29 @@ class _PortalLibraryPage extends StatefulWidget {
   final List<GameLibraryEntry> games;
   final ValueChanged<GameLibraryEntry> onOpenGame;
   final Future<void> Function() onDataChanged;
+  final String initialQuery;
+  final GameStatus? initialStatus;
+  final bool initialFavoriteOnly;
+  final _PortalLibrarySort initialSort;
+  final GamePlatform? initialPlatform;
+  final void Function(
+    String query,
+    GameStatus? status,
+    bool favoriteOnly,
+    _PortalLibrarySort sort,
+    GamePlatform? platform,
+  ) onViewChanged;
 
   const _PortalLibraryPage({
     required this.games,
     required this.onOpenGame,
     required this.onDataChanged,
+    required this.initialQuery,
+    required this.initialStatus,
+    required this.initialFavoriteOnly,
+    required this.initialSort,
+    required this.initialPlatform,
+    required this.onViewChanged,
   });
 
   @override
@@ -2200,25 +2283,53 @@ class _PortalLibraryPage extends StatefulWidget {
 }
 
 class _PortalLibraryPageState extends State<_PortalLibraryPage> {
-  String _query = '';
+  late final TextEditingController _searchController;
+  late String _query;
   GameStatus? _status;
-  bool _favoriteOnly = false;
-  _PortalLibrarySort _sort = _PortalLibrarySort.recent;
+  late bool _favoriteOnly;
+  late _PortalLibrarySort _sort;
+  GamePlatform? _platform;
 
   bool _steamBusy = false;
   String? _steamProgressLabel;
+  bool _gamingBusy = false;
 
   @override
   void initState() {
     super.initState();
+    _query = widget.initialQuery;
+    _status = widget.initialStatus;
+    _favoriteOnly = widget.initialFavoriteOnly;
+    _sort = widget.initialSort;
+    _platform = widget.initialPlatform;
+    _searchController = TextEditingController(text: _query);
     SteamSyncService.syncState.addListener(_handleSteamSyncState);
+    GamingSyncService.syncState.addListener(_handleGamingSyncState);
     _handleSteamSyncState();
+    _handleGamingSyncState();
   }
 
   @override
   void dispose() {
     SteamSyncService.syncState.removeListener(_handleSteamSyncState);
+    GamingSyncService.syncState.removeListener(_handleGamingSyncState);
+    _searchController.dispose();
     super.dispose();
+  }
+
+  void _notifyViewState() {
+    widget.onViewChanged(
+      _query,
+      _status,
+      _favoriteOnly,
+      _sort,
+      _platform,
+    );
+  }
+
+  void _updateView(VoidCallback update) {
+    setState(update);
+    _notifyViewState();
   }
 
   void _handleSteamSyncState() {
@@ -2233,39 +2344,57 @@ class _PortalLibraryPageState extends State<_PortalLibraryPage> {
     });
   }
 
-  Future<void> _syncAllSteam() async {
-    FocusManager.instance.primaryFocus?.unfocus();
-
-    final bool hasIdentity = await SteamSyncService.hasSyncIdentity();
-
+  void _handleGamingSyncState() {
     if (!mounted) {
       return;
     }
 
-    if (!hasIdentity) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Lie d’abord Steam depuis COMPTES avant de synchroniser.',
-          ),
-        ),
-      );
-      return;
-    }
+    final GamingSyncUiState state = GamingSyncService.syncState.value;
+    setState(() {
+      _gamingBusy = state.running;
+    });
+  }
+
+  Future<void> _syncAllGaming() async {
+    FocusManager.instance.primaryFocus?.unfocus();
 
     try {
-      await SteamSyncService.syncEverything(force: true);
+      final GamingSyncResult result = await GamingSyncService.syncEverything(
+        forceSteamAchievements: false,
+        steamStaleAfter: const Duration(hours: 12),
+      );
 
-      if (mounted) {
-        await widget.onDataChanged();
-      }
-    } on SteamSyncException catch (error) {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(error.message)));
+
+      await widget.onDataChanged();
+
+      if (!mounted) {
+        return;
+      }
+
+      String message = result.summary;
+      final List<String> errors = <String>[
+        if (result.steamError?.trim().isNotEmpty == true)
+          'Steam : ${result.steamError!.trim()}',
+        if (result.playStationError?.trim().isNotEmpty == true)
+          'PlayStation : ${result.playStationError!.trim()}',
+      ];
+      if (errors.isNotEmpty) {
+        message = '$message • ${errors.join(' • ')}';
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(message)),
+      );
+    } on GamingSyncException catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error.message)),
+      );
     }
   }
 
@@ -2280,11 +2409,18 @@ class _PortalLibraryPageState extends State<_PortalLibraryPage> {
       filtered = filtered.where((game) => game.status == _status);
     }
 
+    final GamePlatform? platform = _platform;
+    if (platform != null) {
+      filtered = filtered.where(
+        (game) => game.connectedPlatforms.contains(platform),
+      );
+    }
+
     if (query.isNotEmpty) {
       filtered = filtered.where(
         (game) =>
             game.title.toLowerCase().contains(query) ||
-            game.platformSummaryText.toLowerCase().contains(query),
+            _libraryPlatformText(game).toLowerCase().contains(query),
       );
     }
 
@@ -2355,9 +2491,12 @@ class _PortalLibraryPageState extends State<_PortalLibraryPage> {
           colors: <Color>[Color(0xff1b120d), Color(0xff120c08)],
         ),
       ),
-      child: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 18, 16, 26),
+      child: Stack(
         children: [
+          Positioned.fill(
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(16, 18, 16, 96),
+              children: [
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -2378,8 +2517,8 @@ class _PortalLibraryPageState extends State<_PortalLibraryPage> {
                     Text(
                       '${widget.games.length} jeux • '
                       '$inProgress en cours • '
-                      '$backlog pas commencés • '
-                      '$completed terminés',
+                      '$completed terminés • '
+                      '$backlog pas commencés',
                       style: const TextStyle(
                         color: Colors.white54,
                         fontSize: 11.5,
@@ -2390,7 +2529,7 @@ class _PortalLibraryPageState extends State<_PortalLibraryPage> {
               ),
               const SizedBox(width: 10),
               FilledButton.icon(
-                onPressed: _steamBusy ? null : _syncAllSteam,
+                onPressed: (_steamBusy || _gamingBusy) ? null : _syncAllGaming,
                 style: FilledButton.styleFrom(
                   backgroundColor: const Color(0xffffc857),
                   foregroundColor: const Color(0xff21150e),
@@ -2402,7 +2541,7 @@ class _PortalLibraryPageState extends State<_PortalLibraryPage> {
                     vertical: 10,
                   ),
                 ),
-                icon: _steamBusy
+                icon: (_steamBusy || _gamingBusy)
                     ? const SizedBox(
                         width: 14,
                         height: 14,
@@ -2413,7 +2552,7 @@ class _PortalLibraryPageState extends State<_PortalLibraryPage> {
                       )
                     : const Icon(Icons.sync_rounded, size: 17),
                 label: Text(
-                  _steamBusy ? 'SYNC...' : 'SYNCHRO',
+                  (_steamBusy || _gamingBusy) ? 'SYNC...' : 'SYNCHRO',
                   style: const TextStyle(
                     fontSize: 10.5,
                     fontWeight: FontWeight.w900,
@@ -2422,42 +2561,17 @@ class _PortalLibraryPageState extends State<_PortalLibraryPage> {
               ),
             ],
           ),
-          if (_steamProgressLabel != null) ...[
-            const SizedBox(height: 9),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
-              decoration: BoxDecoration(
-                color: const Color(0xff1d1f22),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: Colors.white10),
-              ),
-              child: Row(
-                children: [
-                  const SizedBox(
-                    width: 13,
-                    height: 13,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: Color(0xffffc857),
-                    ),
-                  ),
-                  const SizedBox(width: 9),
-                  Expanded(
-                    child: Text(
-                      _steamProgressLabel!,
-                      style: const TextStyle(
-                        color: Colors.white60,
-                        fontSize: 10.5,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
+          SteamLibrarySyncProgress(
+            fallbackLabel: _steamProgressLabel?.trim().isNotEmpty == true
+                ? _steamProgressLabel!.trim()
+                : 'SYNCHRO',
+          ),
           const SizedBox(height: 14),
           TextField(
-            onChanged: (value) => setState(() => _query = value),
+            controller: _searchController,
+            onChanged: (value) {
+              _updateView(() => _query = value);
+            },
             style: const TextStyle(color: Colors.white),
             decoration: InputDecoration(
               hintText: 'Rechercher un jeu...',
@@ -2488,7 +2602,7 @@ class _PortalLibraryPageState extends State<_PortalLibraryPage> {
                   label: 'Tous',
                   selected: _status == null && !_favoriteOnly,
                   onTap: () {
-                    setState(() {
+                    _updateView(() {
                       _status = null;
                       _favoriteOnly = false;
                     });
@@ -2499,7 +2613,7 @@ class _PortalLibraryPageState extends State<_PortalLibraryPage> {
                   label: 'Favoris',
                   selected: _favoriteOnly,
                   onTap: () {
-                    setState(() {
+                    _updateView(() {
                       _status = null;
                       _favoriteOnly = true;
                     });
@@ -2516,11 +2630,38 @@ class _PortalLibraryPageState extends State<_PortalLibraryPage> {
                     label: status.label,
                     selected: !_favoriteOnly && _status == status,
                     onTap: () {
-                      setState(() {
+                      _updateView(() {
                         _favoriteOnly = false;
                         _status = status;
                       });
                     },
+                  ),
+                  const SizedBox(width: 7),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(height: 9),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                _LibraryFilterChip(
+                  label: 'Toutes plateformes',
+                  selected: _platform == null,
+                  onTap: () => _updateView(() => _platform = null),
+                ),
+                const SizedBox(width: 7),
+                for (final GamePlatform platform in const <GamePlatform>[
+                  GamePlatform.steam,
+                  GamePlatform.playstation,
+                  GamePlatform.xbox,
+                  GamePlatform.nintendo,
+                ]) ...[
+                  _LibraryFilterChip(
+                    label: platform.label,
+                    selected: _platform == platform,
+                    onTap: () => _updateView(() => _platform = platform),
                   ),
                   const SizedBox(width: 7),
                 ],
@@ -2578,7 +2719,7 @@ class _PortalLibraryPageState extends State<_PortalLibraryPage> {
                         if (value == null) {
                           return;
                         }
-                        setState(() => _sort = value);
+                        _updateView(() => _sort = value);
                       },
                     ),
                   ),
@@ -2606,10 +2747,171 @@ class _PortalLibraryPageState extends State<_PortalLibraryPage> {
               ),
               if (i + 1 < games.length) const SizedBox(height: 9),
             ],
+              ],
+            ),
+          ),
+          const Positioned(
+            right: 18,
+            bottom: 18,
+            child: SteamLibraryIssuesFloatingButton(),
+          ),
         ],
       ),
     );
   }
+}
+
+int? _profileDisplayCompletion(GamePlatformProfile profile) {
+  final GameAchievementSummary summary = profile.computedAchievementSummary;
+  if (profile.platform == GamePlatform.playstation &&
+      summary.scoreTotal == 100) {
+    return summary.scoreEarned.clamp(0, 100).toInt();
+  }
+  return profile.completionPercent;
+}
+
+GamePlatformProfile? _bestDisplayProfile(GameLibraryEntry game) {
+  GamePlatformProfile? best;
+  int bestValue = -1;
+  for (final GamePlatformProfile profile in game.resolvedPlatformProfiles) {
+    final int? value = _profileDisplayCompletion(profile);
+    if (value != null && value > bestValue) {
+      best = profile;
+      bestValue = value;
+    }
+  }
+  return best ??
+      (game.resolvedPlatformProfiles.isEmpty
+          ? null
+          : game.resolvedPlatformProfiles.first);
+}
+
+int? _displayCompletionPercent(GameLibraryEntry game) {
+  final GamePlatformProfile? best = _bestDisplayProfile(game);
+  final int? value = best == null ? null : _profileDisplayCompletion(best);
+  if (value != null) return value;
+  return game.progressPercent > 0 ? game.progressPercent : null;
+}
+
+const String _ownedPlayStationPlatformMarkerPrefix =
+    'projectxp:owned-playstation:';
+
+List<String> _ownedPlayStationPlatformLabels(GameLibraryEntry game) {
+  final Set<String> labels = <String>{};
+  for (final String raw in game.catalogPlatforms) {
+    if (!raw.startsWith(_ownedPlayStationPlatformMarkerPrefix)) {
+      continue;
+    }
+    final String label = raw
+        .substring(_ownedPlayStationPlatformMarkerPrefix.length)
+        .trim();
+    if (label.isNotEmpty) {
+      labels.add(label);
+    }
+  }
+
+  int sortValue(String value) {
+    switch (value) {
+      case 'PlayStation 3':
+        return 30;
+      case 'PSP':
+        return 35;
+      case 'PS Vita':
+        return 40;
+      case 'PlayStation 4':
+        return 50;
+      case 'PlayStation 5':
+        return 60;
+      case 'PC (PlayStation)':
+        return 70;
+      default:
+        return 999;
+    }
+  }
+
+  final List<String> result = labels.toList();
+  result.sort((String a, String b) {
+    final int byOrder = sortValue(a).compareTo(sortValue(b));
+    return byOrder != 0 ? byOrder : a.compareTo(b);
+  });
+  return result;
+}
+
+String _profilePlatformText(
+  GameLibraryEntry game,
+  GamePlatformProfile profile,
+) {
+  if (profile.platform != GamePlatform.playstation) {
+    return profile.platform.label;
+  }
+  final List<String> precise = _ownedPlayStationPlatformLabels(game);
+  return precise.isEmpty ? profile.platform.label : precise.join(' / ');
+}
+
+String _libraryPlatformText(GameLibraryEntry game) {
+  final List<String> result = <String>[];
+
+  void add(String value) {
+    final String clean = value.trim();
+    if (clean.isEmpty || result.contains(clean)) {
+      return;
+    }
+    result.add(clean);
+  }
+
+  for (final GamePlatformProfile profile in game.resolvedPlatformProfiles) {
+    if (profile.platform == GamePlatform.playstation) {
+      final List<String> precise = _ownedPlayStationPlatformLabels(game);
+      if (precise.isEmpty) {
+        add(GamePlatform.playstation.label);
+      } else {
+        for (final String label in precise) {
+          add(label);
+        }
+      }
+      continue;
+    }
+    add(profile.platform.label);
+  }
+
+  if (result.isEmpty) {
+    add(game.platform.label);
+  }
+  return result.join(' • ');
+}
+
+String _libraryProgressText(GameLibraryEntry game) {
+  final int? completion = _displayCompletionPercent(game);
+  if (completion != null) {
+    return 'Progression • $completion %';
+  }
+
+  if (game.allAchievementCatalogsKnownEmpty) {
+    final List<GamePlatform> platforms = game.connectedPlatforms;
+    if (platforms.length == 1 && platforms.first == GamePlatform.playstation) {
+      return 'Aucun trophée pour ce jeu';
+    }
+    if (platforms.length == 1 && platforms.first == GamePlatform.steam) {
+      return 'Aucun succès pour ce jeu';
+    }
+    return 'Aucun succès / trophée pour ce jeu';
+  }
+
+  final GamePlatformProfile? playStation =
+      game.platformProfile(GamePlatform.playstation);
+  if (playStation != null && playStation.achievementCatalogKnownEmpty) {
+    final bool anotherPlatformNeedsSync = game.resolvedPlatformProfiles.any(
+      (profile) =>
+          profile.platform != GamePlatform.playstation &&
+          !profile.hasAchievementData &&
+          !profile.achievementCatalogInitialized,
+    );
+    if (!anotherPlatformNeedsSync) {
+      return 'Aucun trophée PlayStation pour ce jeu';
+    }
+  }
+
+  return 'Progression non synchronisée';
 }
 
 class _LibraryFilterChip extends StatelessWidget {
@@ -2644,6 +2946,105 @@ class _LibraryFilterChip extends StatelessWidget {
   }
 }
 
+class _GameCompletionBadges extends StatelessWidget {
+  final GameLibraryEntry game;
+
+  const _GameCompletionBadges({required this.game});
+
+  @override
+  Widget build(BuildContext context) {
+    final List<Widget> badges = <Widget>[];
+    final GamePlatformProfile? playStation =
+        game.platformProfile(GamePlatform.playstation);
+    final GamePlatformProfile? steam = game.platformProfile(GamePlatform.steam);
+
+    if (playStation != null) {
+      final GameAchievementSummary summary =
+          playStation.computedAchievementSummary;
+      final int? completion = _profileDisplayCompletion(playStation);
+
+      if (summary.platinumUnlocked > 0) {
+        badges.add(
+          const Tooltip(
+            message: 'Platine PlayStation',
+            child: Icon(
+              Icons.emoji_events_rounded,
+              size: 19,
+              color: Color(0xffd9e5f2),
+            ),
+          ),
+        );
+      } else if (summary.platinumTotal == 0 && completion == 100) {
+        badges.add(
+          const _CompactCompletionBadge(
+            label: 'PS 100%',
+            tooltip: 'PlayStation • 100 %',
+          ),
+        );
+      }
+    }
+
+    if (steam != null && _profileDisplayCompletion(steam) == 100) {
+      badges.add(
+        const _CompactCompletionBadge(
+          label: 'STEAM 100%',
+          tooltip: 'Perfect Steam • 100 % des succès',
+        ),
+      );
+    }
+
+    if (badges.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(right: 6),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (int index = 0; index < badges.length; index++) ...[
+            badges[index],
+            if (index + 1 < badges.length) const SizedBox(height: 4),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _CompactCompletionBadge extends StatelessWidget {
+  final String label;
+  final String tooltip;
+
+  const _CompactCompletionBadge({
+    required this.label,
+    required this.tooltip,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 3),
+        decoration: BoxDecoration(
+          color: const Color(0xff202326),
+          borderRadius: BorderRadius.circular(7),
+          border: Border.all(color: const Color(0xff64f58d).withValues(alpha: 0.45)),
+        ),
+        child: Text(
+          label,
+          style: const TextStyle(
+            color: Color(0xff64f58d),
+            fontSize: 8.5,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _LibraryGameRow extends StatelessWidget {
   final GameLibraryEntry game;
   final VoidCallback onTap;
@@ -2652,7 +3053,6 @@ class _LibraryGameRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final int? completion = game.bestCompletionPercent;
     return Material(
       color: const Color(0xff1a1c1f),
       borderRadius: BorderRadius.circular(14),
@@ -2688,7 +3088,7 @@ class _LibraryGameRow extends StatelessWidget {
                       TextSpan(
                         children: <InlineSpan>[
                           TextSpan(
-                            text: '${game.platformSummaryText} • ',
+                            text: '${_libraryPlatformText(game)} • ',
                             style: const TextStyle(
                               color: Colors.white54,
                               fontSize: 10.5,
@@ -2713,11 +3113,7 @@ class _LibraryGameRow extends StatelessWidget {
                     ),
                     const SizedBox(height: 5),
                     Text(
-                      completion == null
-                          ? (game.allAchievementCatalogsKnownEmpty
-                                ? 'Aucun succès / trophée pour ce jeu'
-                                : 'Progression non synchronisée')
-                          : 'Progression • $completion %',
+                      _libraryProgressText(game),
                       style: const TextStyle(
                         color: Color(0xffffc857),
                         fontSize: 10.5,
@@ -2727,6 +3123,7 @@ class _LibraryGameRow extends StatelessWidget {
                   ],
                 ),
               ),
+              _GameCompletionBadges(game: game),
               if (game.favorite)
                 const Padding(
                   padding: EdgeInsets.only(right: 5),
@@ -2791,15 +3188,10 @@ class _PortalGamePage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final int? completion = game.bestCompletionPercent;
-    final GamePlatformProfile? profile = game.bestCompletionProfile;
+    final int? completion = _displayCompletionPercent(game);
+    final GamePlatformProfile? profile = _bestDisplayProfile(game);
     final GameAchievementSummary achievements =
         profile?.computedAchievementSummary ?? game.computedAchievementSummary;
-    final List<GameAchievementDetail> details =
-        profile?.achievementDetails ?? game.achievementDetails;
-    final double achievementListHeight = (details.length * 72.0)
-        .clamp(72.0, 520.0)
-        .toDouble();
 
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
@@ -2884,7 +3276,7 @@ class _PortalGamePage extends StatelessWidget {
                         ),
                         const SizedBox(height: 7),
                         Text(
-                          game.platformSummaryText,
+                          _libraryPlatformText(game),
                           style: const TextStyle(
                             color: Colors.white54,
                             fontSize: 11,
@@ -3004,69 +3396,8 @@ class _PortalGamePage extends StatelessWidget {
             ],
             const SizedBox(height: 14),
             _WebSection(
-              title: 'SUCCÈS',
-              child: achievements.total <= 0
-                  ? Text(
-                      game.allAchievementCatalogsKnownEmpty
-                          ? 'Ce jeu ne possède pas de succès connu sur les plateformes synchronisées.'
-                          : 'Les succès ne sont pas encore synchronisés.',
-                      style: const TextStyle(
-                        color: Colors.white54,
-                        fontSize: 11,
-                      ),
-                    )
-                  : details.isEmpty
-                  ? Text(
-                      'La progression est synchronisée '
-                      '(${achievements.unlocked}/${achievements.total}), '
-                      'mais le détail des succès n’est pas encore disponible. '
-                      'Relance SYNCHRO pour récupérer le catalogue complet.',
-                      style: const TextStyle(
-                        color: Colors.white54,
-                        fontSize: 11,
-                        height: 1.4,
-                      ),
-                    )
-                  : Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                '${details.length} succès / trophées chargés',
-                                style: const TextStyle(
-                                  color: Colors.white54,
-                                  fontSize: 10.5,
-                                ),
-                              ),
-                            ),
-                            Text(
-                              '${achievements.unlocked}/${achievements.total}',
-                              style: const TextStyle(
-                                color: Color(0xffffc857),
-                                fontSize: 10.5,
-                                fontWeight: FontWeight.w800,
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 10),
-                        SizedBox(
-                          height: achievementListHeight,
-                          child: ListView.separated(
-                            primary: false,
-                            itemCount: details.length,
-                            itemBuilder: (context, index) =>
-                                _AchievementRow(achievement: details[index]),
-                            separatorBuilder: (context, index) => const Divider(
-                              height: 13,
-                              color: Colors.white10,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
+              title: 'SUCCÈS & TROPHÉES',
+              child: _PlatformAchievementsPanel(game: game),
             ),
             const SizedBox(height: 15),
             Row(
@@ -3222,6 +3553,236 @@ class _WebSection extends StatelessWidget {
           const SizedBox(height: 10),
           child,
         ],
+      ),
+    );
+  }
+}
+
+class _PlatformAchievementsPanel extends StatefulWidget {
+  final GameLibraryEntry game;
+
+  const _PlatformAchievementsPanel({required this.game});
+
+  @override
+  State<_PlatformAchievementsPanel> createState() =>
+      _PlatformAchievementsPanelState();
+}
+
+class _PlatformAchievementsPanelState
+    extends State<_PlatformAchievementsPanel> {
+  GamePlatform? _selectedPlatform;
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedPlatform = widget.game.platform;
+  }
+
+  @override
+  void didUpdateWidget(covariant _PlatformAchievementsPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.game.id != widget.game.id) {
+      _selectedPlatform = widget.game.platform;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final List<GamePlatformProfile> profiles = widget.game.resolvedPlatformProfiles
+        .where(
+          (profile) =>
+              profile.hasAchievementData ||
+              profile.achievementCatalogInitialized,
+        )
+        .toList();
+
+    if (profiles.isEmpty) {
+      return Text(
+        widget.game.allAchievementCatalogsKnownEmpty
+            ? 'Ce jeu ne possède pas de succès connu sur les plateformes synchronisées.'
+            : 'Les succès ne sont pas encore synchronisés.',
+        style: const TextStyle(color: Colors.white54, fontSize: 11),
+      );
+    }
+
+    profiles.sort((a, b) {
+      if (a.platform == widget.game.platform &&
+          b.platform != widget.game.platform) {
+        return -1;
+      }
+      if (b.platform == widget.game.platform &&
+          a.platform != widget.game.platform) {
+        return 1;
+      }
+      return a.platform.index.compareTo(b.platform.index);
+    });
+
+    GamePlatformProfile selected = profiles.first;
+    final GamePlatform? requested = _selectedPlatform;
+    if (requested != null) {
+      for (final GamePlatformProfile profile in profiles) {
+        if (profile.platform == requested) {
+          selected = profile;
+          break;
+        }
+      }
+    }
+
+    final GameAchievementSummary summary =
+        selected.computedAchievementSummary;
+    final List<GameAchievementDetail> details = selected.achievementDetails;
+    final int? percent = _profileDisplayCompletion(selected);
+    final String countText = summary.total > 0
+        ? '${summary.unlocked}/${summary.total}'
+        : selected.progressText;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (profiles.length > 1) ...[
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                for (int index = 0; index < profiles.length; index++) ...[
+                  _LibraryFilterChip(
+                    label: _profilePlatformText(
+                      widget.game,
+                      profiles[index],
+                    ),
+                    selected: selected.platform == profiles[index].platform,
+                    onTap: () {
+                      setState(() {
+                        _selectedPlatform = profiles[index].platform;
+                      });
+                    },
+                  ),
+                  if (index + 1 < profiles.length) const SizedBox(width: 7),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
+        ],
+        Container(
+          padding: const EdgeInsets.all(11),
+          decoration: BoxDecoration(
+            color: const Color(0xff15171a),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.white10),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      _profilePlatformText(widget.game, selected).toUpperCase(),
+                      style: const TextStyle(
+                        color: Color(0xffffc857),
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: 0.6,
+                      ),
+                    ),
+                  ),
+                  Text(
+                    percent == null ? countText : '$countText • $percent %',
+                    style: const TextStyle(
+                      color: Colors.white60,
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 9),
+              if (details.isNotEmpty)
+                _AchievementGroupedList(details: details)
+              else if (selected.achievementCatalogKnownEmpty)
+                Text(
+                  selected.platform == GamePlatform.playstation
+                      ? 'Ce jeu ne possède pas de trophée dans le catalogue PlayStation synchronisé.'
+                      : 'Ce jeu ne possède pas de succès dans le catalogue synchronisé.',
+                  style: const TextStyle(
+                    color: Colors.white54,
+                    fontSize: 11,
+                    height: 1.4,
+                  ),
+                )
+              else
+                Text(
+                  selected.platform == GamePlatform.playstation
+                      ? 'La progression PlayStation est connue, mais le détail des trophées doit encore être récupéré. Relance SYNCHRO.'
+                      : 'La progression Steam est connue, mais le catalogue détaillé doit encore être récupéré. Relance SYNCHRO.',
+                  style: const TextStyle(
+                    color: Colors.white54,
+                    fontSize: 11,
+                    height: 1.4,
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _AchievementGroupedList extends StatelessWidget {
+  final List<GameAchievementDetail> details;
+
+  const _AchievementGroupedList({required this.details});
+
+  @override
+  Widget build(BuildContext context) {
+    final Map<String, List<GameAchievementDetail>> groups =
+        <String, List<GameAchievementDetail>>{};
+    bool hasNamedGroup = false;
+
+    for (final GameAchievementDetail achievement in details) {
+      final String rawGroup = achievement.groupName?.trim() ?? '';
+      if (rawGroup.isNotEmpty) hasNamedGroup = true;
+      final String key = rawGroup.isEmpty ? 'Jeu de base' : rawGroup;
+      groups.putIfAbsent(key, () => <GameAchievementDetail>[]).add(achievement);
+    }
+
+    final List<Widget> rows = <Widget>[];
+    for (final MapEntry<String, List<GameAchievementDetail>> group
+        in groups.entries) {
+      if (hasNamedGroup) {
+        rows.add(
+          Padding(
+            padding: EdgeInsets.only(top: rows.isEmpty ? 0 : 10, bottom: 5),
+            child: Text(
+              group.key.toUpperCase(),
+              style: const TextStyle(
+                color: Colors.white38,
+                fontSize: 9.5,
+                fontWeight: FontWeight.w900,
+                letterSpacing: 0.5,
+              ),
+            ),
+          ),
+        );
+      }
+      for (int index = 0; index < group.value.length; index += 1) {
+        rows.add(_AchievementRow(achievement: group.value[index]));
+        if (index + 1 < group.value.length) {
+          rows.add(const Divider(height: 13, color: Colors.white10));
+        }
+      }
+    }
+
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxHeight: 520),
+      child: SingleChildScrollView(
+        primary: false,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: rows,
+        ),
       ),
     );
   }

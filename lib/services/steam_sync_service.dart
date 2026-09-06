@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -47,6 +50,24 @@ class SteamAchievementSyncIssue {
     required this.appId,
     required this.message,
   });
+
+  Map<String, dynamic> toJson() {
+    return <String, dynamic>{
+      'gameId': gameId,
+      'title': title,
+      'appId': appId,
+      'message': message,
+    };
+  }
+
+  factory SteamAchievementSyncIssue.fromJson(Map<String, dynamic> json) {
+    return SteamAchievementSyncIssue(
+      gameId: json['gameId']?.toString() ?? '',
+      title: json['title']?.toString() ?? '',
+      appId: json['appId']?.toString() ?? '',
+      message: json['message']?.toString() ?? '',
+    );
+  }
 }
 
 class SteamAllAchievementSyncResult {
@@ -83,12 +104,16 @@ class SteamFullSyncResult {
 
 enum SteamSyncPhase { idle, library, achievements, completed, failed }
 
+enum SteamSyncGameOutcome { success, failed }
+
 class SteamSyncUiState {
   final SteamSyncPhase phase;
   final String label;
   final int current;
   final int total;
   final String? message;
+  final List<SteamSyncGameOutcome> outcomes;
+  final List<SteamAchievementSyncIssue> issues;
 
   const SteamSyncUiState({
     required this.phase,
@@ -96,6 +121,8 @@ class SteamSyncUiState {
     this.current = 0,
     this.total = 0,
     this.message,
+    this.outcomes = const <SteamSyncGameOutcome>[],
+    this.issues = const <SteamAchievementSyncIssue>[],
   });
 
   const SteamSyncUiState.idle()
@@ -103,7 +130,9 @@ class SteamSyncUiState {
       label = '',
       current = 0,
       total = 0,
-      message = null;
+      message = null,
+      outcomes = const <SteamSyncGameOutcome>[],
+      issues = const <SteamAchievementSyncIssue>[];
 
   bool get running =>
       phase == SteamSyncPhase.library || phase == SteamSyncPhase.achievements;
@@ -131,17 +160,123 @@ class SteamSyncService {
   SteamSyncService._();
 
   static Future<SteamFullSyncResult>? _activeSync;
+  static bool _retryingIssues = false;
   static String? _cachedOfficialSteamId;
 
   static final ValueNotifier<SteamSyncUiState> syncState =
       ValueNotifier<SteamSyncUiState>(const SteamSyncUiState.idle());
 
-  static bool get backgroundSyncRunning => _activeSync != null;
+  static bool get backgroundSyncRunning =>
+      _activeSync != null || _retryingIssues;
   static const String _steamRefPrefix = 'project_xp_steam_reference_';
   static const String _steamIdPrefix = 'project_xp_steam_id_';
+  static const String _steamIssuesPrefix = 'project_xp_steam_sync_issues_';
+  static const String _steamIssueRetryPrefix =
+      'project_xp_steam_sync_issue_retries_';
+  static const int maxIssueRetryAttempts = 3;
+  static const Duration _achievementRequestTimeout = Duration(seconds: 25);
+  static const int _achievementSyncConcurrency = 3;
 
   static Future<String?> _currentUserId() {
     return AuthService.getCurrentUserId();
+  }
+
+  static Future<String?> _issuesStorageKey() async {
+    final String? userId = await _currentUserId();
+    if (userId == null || userId.trim().isEmpty) {
+      return null;
+    }
+    return '$_steamIssuesPrefix${userId.trim()}';
+  }
+
+  static Future<String?> _issueRetryStorageKey() async {
+    final String? userId = await _currentUserId();
+    if (userId == null || userId.trim().isEmpty) {
+      return null;
+    }
+    return '$_steamIssueRetryPrefix${userId.trim()}';
+  }
+
+  static Future<int> loadIssueRetryAttempts() async {
+    final String? key = await _issueRetryStorageKey();
+    if (key == null) {
+      return 0;
+    }
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    return (prefs.getInt(key) ?? 0)
+        .clamp(0, maxIssueRetryAttempts)
+        .toInt();
+  }
+
+  static Future<void> _saveIssueRetryAttempts(int attempts) async {
+    final String? key = await _issueRetryStorageKey();
+    if (key == null) {
+      return;
+    }
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    final int safeAttempts = attempts
+        .clamp(0, maxIssueRetryAttempts)
+        .toInt();
+    if (safeAttempts <= 0) {
+      await prefs.remove(key);
+      return;
+    }
+    await prefs.setInt(key, safeAttempts);
+  }
+
+  static Future<List<SteamAchievementSyncIssue>> loadSavedIssues() async {
+    final String? key = await _issuesStorageKey();
+    if (key == null) {
+      return const <SteamAchievementSyncIssue>[];
+    }
+
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    final String raw = prefs.getString(key)?.trim() ?? '';
+    if (raw.isEmpty) {
+      return const <SteamAchievementSyncIssue>[];
+    }
+
+    try {
+      final dynamic decoded = jsonDecode(raw);
+      if (decoded is! List) {
+        return const <SteamAchievementSyncIssue>[];
+      }
+
+      final List<SteamAchievementSyncIssue> issues =
+          <SteamAchievementSyncIssue>[];
+      for (final dynamic item in decoded) {
+        if (item is Map) {
+          issues.add(
+            SteamAchievementSyncIssue.fromJson(
+              Map<String, dynamic>.from(item),
+            ),
+          );
+        }
+      }
+      return List<SteamAchievementSyncIssue>.unmodifiable(issues);
+    } catch (_) {
+      return const <SteamAchievementSyncIssue>[];
+    }
+  }
+
+  static Future<void> _saveIssues(
+    List<SteamAchievementSyncIssue> issues,
+  ) async {
+    final String? key = await _issuesStorageKey();
+    if (key == null) {
+      return;
+    }
+
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    if (issues.isEmpty) {
+      await prefs.remove(key);
+      return;
+    }
+
+    await prefs.setString(
+      key,
+      jsonEncode(issues.map((issue) => issue.toJson()).toList()),
+    );
   }
 
   static Future<String?> getSavedReference() async {
@@ -239,6 +374,8 @@ class SteamSyncService {
     await Future.wait<bool>([
       prefs.remove('$_steamRefPrefix$userId'),
       prefs.remove('$_steamIdPrefix$userId'),
+      prefs.remove('$_steamIssuesPrefix$userId'),
+      prefs.remove('$_steamIssueRetryPrefix$userId'),
     ]);
   }
 
@@ -256,11 +393,9 @@ class SteamSyncService {
 
   /// Synchronisation non bloquante lancée au démarrage de Project XP.
   ///
-  /// La bibliothèque Steam est rafraîchie à chaque lancement. Les succès sont
-  /// ensuite actualisés intelligemment : jeux jamais synchronisés, activité
-  /// Steam modifiée ou données devenues anciennes. La file est plafonnée au
-  /// démarrage afin de garder l'application fluide ; le bouton SYNCHRONISER
-  /// TOUT force, lui, la totalité de la bibliothèque.
+  /// La bibliothèque Steam et les succès de TOUS les jeux liés sont rafraîchis
+  /// à chaque lancement. Le Hall n'attend jamais cette opération : elle reste
+  /// en arrière-plan. L'ancien plafond artificiel de 8 jeux est supprimé.
   static Future<void> syncAtStartup() async {
     final String reference = (await getSyncReference() ?? '').trim();
 
@@ -271,7 +406,6 @@ class SteamSyncService {
     try {
       await syncEverything(
         force: false,
-        maxGames: 8,
         staleAfter: const Duration(hours: 12),
       );
     } on SteamSyncException catch (error) {
@@ -315,9 +449,13 @@ class SteamSyncService {
       );
     }
 
+    if (force) {
+      await _saveIssueRetryAttempts(0);
+    }
+
     syncState.value = const SteamSyncUiState(
       phase: SteamSyncPhase.library,
-      label: 'Synchronisation Steam • Bibliothèque…',
+      label: 'SYNCHRO • Bibliothèque…',
     );
 
     try {
@@ -328,7 +466,7 @@ class SteamSyncService {
 
       syncState.value = const SteamSyncUiState(
         phase: SteamSyncPhase.achievements,
-        label: 'Synchronisation Steam • Succès…',
+        label: 'SYNCHRO • Succès…',
       );
 
       final SteamAllAchievementSyncResult achievementResult =
@@ -338,14 +476,20 @@ class SteamSyncService {
             force: force,
             staleAfter: staleAfter,
             maxGames: maxGames,
-            onProgress: (int current, int total, String title) {
+            onProgress: (
+              int completed,
+              int total,
+              String title,
+              List<SteamSyncGameOutcome> outcomes,
+            ) {
               syncState.value = SteamSyncUiState(
                 phase: SteamSyncPhase.achievements,
                 label: total <= 0
                     ? 'Succès Steam à jour'
-                    : 'Succès $current / $total • $title',
-                current: current,
+                    : 'SYNCHRO • $completed/$total • $title',
+                current: completed,
                 total: total,
+                outcomes: outcomes,
               );
             },
           );
@@ -366,19 +510,43 @@ class SteamSyncService {
       String message = 'Synchronisation terminée • ${details.join(' • ')}.';
 
       if (achievementResult.issues.isNotEmpty) {
-        final SteamAchievementSyncIssue first = achievementResult.issues.first;
+        final String issueTitles = achievementResult.issues
+            .take(5)
+            .map((issue) => issue.title.trim())
+            .where((title) => title.isNotEmpty)
+            .join(', ');
 
-        message += ' À revoir : ${first.title}.';
+        if (issueTitles.isNotEmpty) {
+          message += ' À revoir : $issueTitles';
+
+          final int remaining = achievementResult.issues.length - 5;
+          if (remaining > 0) {
+            message += ' (+$remaining)';
+          }
+
+          message += '.';
+        }
       }
 
       if (libraryResult.warning?.trim().isNotEmpty == true) {
         message += ' ${libraryResult.warning!.trim()}';
       }
 
+      await _saveIssues(achievementResult.issues);
+      if (achievementResult.issues.isEmpty) {
+        await _saveIssueRetryAttempts(0);
+      }
+
+      final SteamSyncUiState progressState = syncState.value;
+
       syncState.value = SteamSyncUiState(
         phase: SteamSyncPhase.completed,
         label: 'Synchronisation terminée',
+        current: progressState.current,
+        total: progressState.total,
         message: message,
+        outcomes: progressState.outcomes,
+        issues: achievementResult.issues,
       );
 
       return SteamFullSyncResult(
@@ -386,26 +554,182 @@ class SteamSyncService {
         achievements: achievementResult,
       );
     } on SteamSyncException catch (error) {
+      final SteamSyncUiState progressState = syncState.value;
+
       syncState.value = SteamSyncUiState(
         phase: SteamSyncPhase.failed,
         label: 'Synchronisation échouée',
+        current: progressState.current,
+        total: progressState.total,
         message: 'Synchronisation échouée • ${error.message}',
+        outcomes: progressState.outcomes,
+        issues: progressState.issues,
       );
       rethrow;
     } catch (error) {
       final SteamSyncException wrapped = SteamSyncException(
         _friendlyFunctionError(error.toString()),
       );
+      final SteamSyncUiState progressState = syncState.value;
 
       syncState.value = SteamSyncUiState(
         phase: SteamSyncPhase.failed,
         label: 'Synchronisation échouée',
+        current: progressState.current,
+        total: progressState.total,
         message: 'Synchronisation échouée • ${wrapped.message}',
+        outcomes: progressState.outcomes,
+        issues: progressState.issues,
       );
 
       throw wrapped;
     } finally {
       _activeSync = null;
+    }
+  }
+
+  /// Relance uniquement les jeux restés "à revoir" après la dernière
+  /// synchronisation complète. Les jeux déjà validés ne sont pas rappelés.
+  static Future<void> retryFailedAchievements() async {
+    if (_activeSync != null || _retryingIssues) {
+      return;
+    }
+
+    final List<SteamAchievementSyncIssue> previousIssues =
+        syncState.value.issues.isNotEmpty
+        ? List<SteamAchievementSyncIssue>.from(syncState.value.issues)
+        : List<SteamAchievementSyncIssue>.from(await loadSavedIssues());
+
+    if (previousIssues.isEmpty) {
+      return;
+    }
+
+    final int previousAttempts = await loadIssueRetryAttempts();
+    if (previousAttempts >= maxIssueRetryAttempts) {
+      return;
+    }
+    final int currentAttempt = previousAttempts + 1;
+    await _saveIssueRetryAttempts(currentAttempt);
+
+    _retryingIssues = true;
+
+    try {
+      final List<GameLibraryEntry> library =
+          await GameLibraryService.loadCurrentLibraryConsolidated();
+      final List<SteamAchievementSyncIssue> remaining =
+          <SteamAchievementSyncIssue>[];
+      final List<SteamSyncGameOutcome> outcomes = <SteamSyncGameOutcome>[];
+
+      for (int index = 0; index < previousIssues.length; index += 1) {
+        final SteamAchievementSyncIssue issue = previousIssues[index];
+
+        GameLibraryEntry? game;
+        for (final GameLibraryEntry candidate in library) {
+          final String candidateAppId = candidate
+                  .platformProfile(GamePlatform.steam)
+                  ?.externalId
+                  ?.trim() ??
+              '';
+
+          if (candidate.id == issue.gameId ||
+              (issue.appId.isNotEmpty && candidateAppId == issue.appId)) {
+            game = candidate;
+            break;
+          }
+        }
+
+        syncState.value = SteamSyncUiState(
+          phase: SteamSyncPhase.achievements,
+          label:
+              'Nouvel essai Steam • ${index + 1}/${previousIssues.length} • '
+              '${issue.title}',
+          current: index,
+          total: previousIssues.length,
+          outcomes: List<SteamSyncGameOutcome>.unmodifiable(outcomes),
+          issues: List<SteamAchievementSyncIssue>.unmodifiable(previousIssues),
+        );
+
+        if (game == null) {
+          remaining.add(
+            SteamAchievementSyncIssue(
+              gameId: issue.gameId,
+              title: issue.title,
+              appId: issue.appId,
+              message: 'Le jeu n’est plus présent dans la Bibliothèque.',
+            ),
+          );
+          outcomes.add(SteamSyncGameOutcome.failed);
+        } else {
+          try {
+            await syncAchievements(game);
+            outcomes.add(SteamSyncGameOutcome.success);
+          } on SteamSyncException catch (error) {
+            remaining.add(
+              SteamAchievementSyncIssue(
+                gameId: issue.gameId,
+                title: issue.title,
+                appId: issue.appId,
+                message: error.message,
+              ),
+            );
+            outcomes.add(SteamSyncGameOutcome.failed);
+          } catch (error) {
+            remaining.add(
+              SteamAchievementSyncIssue(
+                gameId: issue.gameId,
+                title: issue.title,
+                appId: issue.appId,
+                message: _friendlyFunctionError(error),
+              ),
+            );
+            outcomes.add(SteamSyncGameOutcome.failed);
+          }
+        }
+
+        syncState.value = SteamSyncUiState(
+          phase: SteamSyncPhase.achievements,
+          label:
+              'Nouvel essai Steam • ${index + 1}/${previousIssues.length} • '
+              '${issue.title}',
+          current: index + 1,
+          total: previousIssues.length,
+          outcomes: List<SteamSyncGameOutcome>.unmodifiable(outcomes),
+          issues: List<SteamAchievementSyncIssue>.unmodifiable(remaining),
+        );
+
+        if (index + 1 < previousIssues.length) {
+          await Future<void>.delayed(const Duration(milliseconds: 120));
+        }
+      }
+
+      await _saveIssues(remaining);
+      if (remaining.isEmpty) {
+        await _saveIssueRetryAttempts(0);
+      }
+
+      syncState.value = SteamSyncUiState(
+        phase: SteamSyncPhase.completed,
+        label: remaining.isEmpty
+            ? 'Jeux à revoir corrigés'
+            : '${remaining.length} jeu${remaining.length > 1 ? 'x' : ''} '
+                'encore à revoir',
+        current: previousIssues.length,
+        total: previousIssues.length,
+        message: remaining.isEmpty
+            ? 'Tous les jeux à revoir ont été resynchronisés.'
+            : 'Certains jeux restent indisponibles côté Steam.',
+        outcomes: List<SteamSyncGameOutcome>.unmodifiable(outcomes),
+        issues: List<SteamAchievementSyncIssue>.unmodifiable(remaining),
+      );
+    } catch (error) {
+      syncState.value = SteamSyncUiState(
+        phase: SteamSyncPhase.failed,
+        label: 'Nouvel essai Steam impossible',
+        message: _friendlyFunctionError(error),
+        issues: List<SteamAchievementSyncIssue>.unmodifiable(previousIssues),
+      );
+    } finally {
+      _retryingIssues = false;
     }
   }
 
@@ -517,10 +841,20 @@ class SteamSyncService {
         // agrandies en portrait, elles donnaient l'impression d'une cover
         // extrêmement pixelisée.
         final List<String> coverFallbackUrls = <String>[
-          'https://shared.cloudflare.steamstatic.com/store_item_assets/'
+          'https://shared.fastly.steamstatic.com/store_item_assets/'
               'steam/apps/$appId/library_600x900_2x.jpg',
           'https://shared.cloudflare.steamstatic.com/store_item_assets/'
+              'steam/apps/$appId/library_600x900_2x.jpg',
+          'https://steamcdn-a.akamaihd.net/steam/apps/'
+              '$appId/library_600x900_2x.jpg',
+          'https://cdn.akamai.steamstatic.com/steam/apps/'
+              '$appId/library_600x900_2x.jpg',
+          'https://shared.fastly.steamstatic.com/store_item_assets/'
               'steam/apps/$appId/library_600x900.jpg',
+          'https://shared.cloudflare.steamstatic.com/store_item_assets/'
+              'steam/apps/$appId/library_600x900.jpg',
+          'https://steamcdn-a.akamaihd.net/steam/apps/'
+              '$appId/library_600x900.jpg',
           'https://cdn.akamai.steamstatic.com/steam/apps/'
               '$appId/library_600x900.jpg',
         ];
@@ -537,7 +871,7 @@ class SteamSyncService {
             source: GameSource.steam,
             externalId: appId,
             coverUrl:
-                'https://shared.cloudflare.steamstatic.com/'
+                'https://shared.fastly.steamstatic.com/'
                 'store_item_assets/steam/apps/'
                 '$appId/library_600x900_2x.jpg',
             coverFallbackUrls: coverFallbackUrls,
@@ -606,7 +940,8 @@ class SteamSyncService {
               'steamId': steamId,
               'appId': steamProfile.externalId,
             },
-          );
+          )
+          .timeout(_achievementRequestTimeout);
 
       final dynamic raw = response.data;
       if (raw is! Map) {
@@ -672,6 +1007,14 @@ class SteamSyncService {
       final List<GameAchievementDetail> newlyUnlockedDetails =
           <GameAchievementDetail>[];
 
+      // Le catalogue renvoyé par Steam est la référence officielle pour le
+      // statut automatique. Les anciennes entrées locales ne doivent pas
+      // empêcher un vrai 100 % Steam de passer le jeu en Terminé.
+      final int officialAchievementTotal = remote.length;
+      final int officialUnlocked = remote
+          .where((achievement) => achievement.platformUnlocked)
+          .length;
+
       final List<GameAchievementDetail> merged = remote.map((
         GameAchievementDetail incoming,
       ) {
@@ -700,16 +1043,24 @@ class SteamSyncService {
         return result;
       }).toList();
 
-      // On conserve les accomplissements ajoutés/cochés manuellement qui ne
-      // font pas partie du catalogue renvoyé par Steam.
+      // On conserve uniquement les accomplissements réellement ajoutés /
+      // cochés manuellement qui ne font pas partie du catalogue Steam actuel.
+      // Une ancienne entrée distante supprimée du schéma Steam ne doit plus
+      // gonfler le dénominateur et transformer artificiellement un 100 % en
+      // progression partielle.
       final Set<String> remoteIds = merged
           .map((achievement) => achievement.id)
           .toSet();
 
       for (final GameAchievementDetail previous
           in steamProfile.achievementDetails) {
-        if (!remoteIds.contains(previous.id)) {
-          merged.add(previous);
+        if (!remoteIds.contains(previous.id) && previous.manuallyUnlocked) {
+          merged.add(
+            previous.copyWith(
+              platformUnlocked: false,
+              clearPlatformUnlockedAt: true,
+            ),
+          );
         }
       }
 
@@ -755,20 +1106,28 @@ class SteamSyncService {
       //   a été terminée, donc un Terminé / Abandonné manuel reste pertinent ;
       // - Pas commencé / En cours sont toujours corrigés par le temps de jeu
       //   et les succès réellement débloqués sur Steam.
-      final int platformUnlocked = updatedSteam.achievementDetails.isNotEmpty
-          ? updatedSteam.achievementDetails
-                .where((achievement) => achievement.platformUnlocked)
-                .length
+      final int platformUnlocked = officialAchievementTotal > 0
+          ? officialUnlocked
           : summary.unlocked;
-      final int achievementTotal = updatedSteam.achievementDetails.isNotEmpty
-          ? updatedSteam.achievementDetails.length
+      final int achievementTotal = officialAchievementTotal > 0
+          ? officialAchievementTotal
           : summary.total;
       final bool hasKnownAchievementProgress = achievementTotal > 0;
       final bool hasStarted =
           updatedSteam.playtimeMinutes > 0 || platformUnlocked > 0;
 
+      // Un jeu terminé sur une plateforme reste Terminé dans la bibliothèque
+      // multi-plateforme. Une progression PlayStation / Xbox plus faible ne
+      // doit pas rétrograder un Perfect Steam, et inversement.
+      final bool anotherPlatformCompleted = entry.resolvedPlatformProfiles.any(
+        (profile) =>
+            profile.platform != GamePlatform.steam &&
+            profile.completionPercent == 100,
+      );
+
       GameStatus automaticStatus;
-      if (hasKnownAchievementProgress && platformUnlocked >= achievementTotal) {
+      if (anotherPlatformCompleted ||
+          (hasKnownAchievementProgress && platformUnlocked >= achievementTotal)) {
         automaticStatus = GameStatus.completed;
       } else if (hasStarted) {
         automaticStatus = GameStatus.inProgress;
@@ -842,6 +1201,11 @@ class SteamSyncService {
         ),
         firstDetailedSync: firstDetailedSync,
       );
+    } on TimeoutException {
+      throw const SteamSyncException(
+        'Steam n’a pas répondu à temps pour ce jeu. '
+        'Tu peux le réessayer depuis JEUX À REVOIR.',
+      );
     } on FunctionException catch (error) {
       throw SteamSyncException(_friendlyFunctionError(error.details));
     } on SteamSyncException {
@@ -907,7 +1271,12 @@ class SteamSyncService {
     bool force = false,
     Duration staleAfter = const Duration(hours: 24),
     int? maxGames,
-    void Function(int current, int total, String title)? onProgress,
+    void Function(
+      int completed,
+      int total,
+      String title,
+      List<SteamSyncGameOutcome> outcomes,
+    )? onProgress,
   }) async {
     final DateTime now = DateTime.now();
     final List<GameLibraryEntry> linked = library.where((game) {
@@ -927,8 +1296,13 @@ class SteamSyncService {
       final String appId = steam.externalId!.trim();
       final DateTime? lastSync = steam.achievementsLastSyncedAt;
 
+      final bool detailedCatalogMissing =
+          steam.computedAchievementSummary.total > 0 &&
+          steam.achievementDetails.isEmpty;
       final bool neverSynced =
-          !steam.achievementCatalogInitialized || lastSync == null;
+          !steam.achievementCatalogInitialized ||
+          lastSync == null ||
+          detailedCatalogMissing;
       final bool activityChanged = activityChangedAppIds.contains(appId);
       final bool stale =
           lastSync == null || now.difference(lastSync) >= staleAfter;
@@ -993,74 +1367,126 @@ class SteamSyncService {
         <
           (GameLibraryEntry, GamePlatformProfile, List<GameAchievementDetail>)
         >[];
+    final List<SteamSyncGameOutcome> outcomes = <SteamSyncGameOutcome>[];
 
-    for (int index = 0; index < queue.length; index += 1) {
-      final GameLibraryEntry game = queue[index];
-      onProgress?.call(index + 1, queue.length, game.title);
+    if (queue.isNotEmpty) {
+      onProgress?.call(
+        0,
+        queue.length,
+        queue.first.title,
+        const <SteamSyncGameOutcome>[],
+      );
+    }
 
-      try {
-        final SteamAchievementSyncResult result = await syncAchievements(
-          game,
-          persist: false,
-          announceNewUnlocks: false,
+    int nextQueueIndex = 0;
+    int completed = 0;
+
+    Future<void> worker(int workerIndex) async {
+      // Décalage très léger au démarrage : on gagne le parallélisme sans
+      // envoyer trois appels exactement à la même milliseconde vers Steam.
+      if (workerIndex > 0) {
+        await Future<void>.delayed(
+          Duration(milliseconds: 120 * workerIndex),
         );
-        checked += 1;
-        newlyUnlocked += result.newlyUnlocked;
-        totalAchievementsKnown += result.summary.total;
+      }
 
-        final int libraryIndex = workingLibrary.indexWhere(
-          (item) => item.id == game.id,
-        );
-        if (libraryIndex != -1) {
-          workingLibrary[libraryIndex] = result.updatedEntry;
+      while (true) {
+        if (nextQueueIndex >= queue.length) {
+          return;
         }
 
-        if (!result.firstDetailedSync &&
-            result.newlyUnlockedDetails.isNotEmpty) {
-          final GamePlatformProfile? updatedSteam = result.updatedEntry
-              .platformProfile(GamePlatform.steam);
-          if (updatedSteam != null) {
-            announcements.add((
-              game,
-              updatedSteam,
-              result.newlyUnlockedDetails,
-            ));
+        final int index = nextQueueIndex;
+        nextQueueIndex += 1;
+        final GameLibraryEntry game = queue[index];
+
+        try {
+          final SteamAchievementSyncResult result = await syncAchievements(
+            game,
+            persist: false,
+            announceNewUnlocks: false,
+          );
+          checked += 1;
+          newlyUnlocked += result.newlyUnlocked;
+          totalAchievementsKnown += result.summary.total;
+
+          final int libraryIndex = workingLibrary.indexWhere(
+            (item) => item.id == game.id,
+          );
+          if (libraryIndex != -1) {
+            workingLibrary[libraryIndex] = result.updatedEntry;
           }
+
+          if (!result.firstDetailedSync &&
+              result.newlyUnlockedDetails.isNotEmpty) {
+            final GamePlatformProfile? updatedSteam = result.updatedEntry
+                .platformProfile(GamePlatform.steam);
+            if (updatedSteam != null) {
+              announcements.add((
+                game,
+                updatedSteam,
+                result.newlyUnlockedDetails,
+              ));
+            }
+          }
+
+          if (result.summary.total <= 0 && result.achievements.isEmpty) {
+            noAchievements += 1;
+          }
+
+          outcomes.add(SteamSyncGameOutcome.success);
+        } on SteamSyncException catch (error) {
+          // Une fiche indisponible / privée ne bloque jamais les autres.
+          // Avec trois workers, un jeu lent ou en timeout ne fige plus toute
+          // la file derrière lui.
+          unavailable += 1;
+
+          final String appId =
+              game.platformProfile(GamePlatform.steam)?.externalId?.trim() ??
+              '';
+
+          issues.add(
+            SteamAchievementSyncIssue(
+              gameId: game.id,
+              title: game.title,
+              appId: appId,
+              message: error.message,
+            ),
+          );
+          outcomes.add(SteamSyncGameOutcome.failed);
+
+          debugPrint(
+            'Succès Steam indisponibles pour ${game.title} '
+            '($appId) : ${error.message}',
+          );
         }
 
-        if (result.summary.total <= 0 && result.achievements.isEmpty) {
-          noAchievements += 1;
+        completed += 1;
+        onProgress?.call(
+          completed,
+          queue.length,
+          game.title,
+          List<SteamSyncGameOutcome>.unmodifiable(outcomes),
+        );
+
+        // Respiration courte entre deux jeux d'un même worker. Le débit reste
+        // volontairement borné même si la bibliothèque contient 100+ jeux.
+        if (nextQueueIndex < queue.length) {
+          await Future<void>.delayed(const Duration(milliseconds: 90));
         }
-      } on SteamSyncException catch (error) {
-        // Une fiche indisponible / privée ne doit jamais bloquer les autres.
-        // On conserve aussi le détail pour savoir quels jeux sont à revoir,
-        // sans toucher à leurs données de succès déjà enregistrées.
-        unavailable += 1;
-
-        final String appId =
-            game.platformProfile(GamePlatform.steam)?.externalId?.trim() ?? '';
-
-        issues.add(
-          SteamAchievementSyncIssue(
-            gameId: game.id,
-            title: game.title,
-            appId: appId,
-            message: error.message,
-          ),
-        );
-
-        debugPrint(
-          'Succès Steam indisponibles pour ${game.title} '
-          '($appId) : ${error.message}',
-        );
       }
+    }
 
-      // Petite respiration entre deux appels pour éviter un burst inutile
-      // lorsque la première synchronisation doit parcourir une grosse
-      // bibliothèque.
-      if (index + 1 < queue.length) {
-        await Future<void>.delayed(const Duration(milliseconds: 90));
-      }
+    final int workerCount = queue.length < _achievementSyncConcurrency
+        ? queue.length
+        : _achievementSyncConcurrency;
+
+    if (workerCount > 0) {
+      await Future.wait<void>(
+        List<Future<void>>.generate(
+          workerCount,
+          (index) => worker(index),
+        ),
+      );
     }
 
     // Une grosse bibliothèque ne doit pas déclencher 100+ remplacements Cloud

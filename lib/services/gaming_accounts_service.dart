@@ -298,6 +298,101 @@ class GamingAccountsService {
     }
   }
 
+  static Future<void> openPlayStationTokenPage() async {
+    final Uri uri = Uri.parse(
+      'https://ca.account.sony.com/api/v1/ssocookie',
+    );
+
+    final bool launched = await launchUrl(
+      uri,
+      mode: LaunchMode.externalApplication,
+    );
+
+    if (!launched) {
+      throw const GamingAccountsException(
+        'Impossible d’ouvrir la page PlayStation dans le navigateur.',
+      );
+    }
+  }
+
+  static Future<GamingAccountLink> linkPlayStation({
+    required String onlineId,
+    required String npsso,
+  }) async {
+    final User? user = permanentUser;
+    if (user == null) {
+      throw const GamingAccountsException(
+        'Active d’abord ton compte Cloud Project XP pour lier PlayStation de façon sécurisée.',
+      );
+    }
+
+    final String cleanOnlineId = onlineId.trim();
+    final String cleanNpsso = npsso.trim();
+
+    if (cleanOnlineId.length < 3) {
+      throw const GamingAccountsException(
+        'Entre ton identifiant en ligne PlayStation.',
+      );
+    }
+
+    if (cleanNpsso.length < 32) {
+      throw const GamingAccountsException(
+        'Le jeton NPSSO PlayStation semble incomplet.',
+      );
+    }
+
+    try {
+      final FunctionResponse response =
+          await SupabaseService.client.functions.invoke(
+        'platform-auth',
+        body: <String, dynamic>{
+          'action': 'playstation_link',
+          'onlineId': cleanOnlineId,
+          'npsso': cleanNpsso,
+        },
+      );
+
+      final dynamic raw = response.data;
+      if (raw is! Map) {
+        throw const GamingAccountsException(
+          'Project XP n’a pas reçu de réponse PlayStation valide.',
+        );
+      }
+
+      final Map<String, dynamic> data =
+          Map<String, dynamic>.from(raw);
+      if (data['ok'] != true) {
+        throw GamingAccountsException(
+          data['error']?.toString() ??
+              'Impossible de lier le compte PlayStation.',
+        );
+      }
+
+      final dynamic accountRaw = data['account'];
+      if (accountRaw is! Map) {
+        throw const GamingAccountsException(
+          'Le compte PlayStation a été validé mais son profil est incomplet.',
+        );
+      }
+
+      revision.value += 1;
+
+      return GamingAccountLink.fromJson(
+        Map<String, dynamic>.from(accountRaw),
+      );
+    } on FunctionException catch (error) {
+      throw GamingAccountsException(
+        _friendlyFunctionError(error.details),
+      );
+    } on GamingAccountsException {
+      rethrow;
+    } catch (error) {
+      throw GamingAccountsException(
+        _friendlyFunctionError(error.toString()),
+      );
+    }
+  }
+
   static Future<void> unlink(
     GamingPlatformProvider provider,
   ) async {
@@ -306,6 +401,11 @@ class GamingAccountsService {
       throw const GamingAccountsException(
         'Aucun compte Cloud actif.',
       );
+    }
+
+    if (provider == GamingPlatformProvider.playstation) {
+      await _unlinkPlayStation();
+      return;
     }
 
     try {
@@ -319,6 +419,44 @@ class GamingAccountsService {
     } catch (error) {
       throw GamingAccountsException(
         'Impossible de délier ${provider.label} pour le moment.',
+      );
+    }
+  }
+
+  static Future<void> _unlinkPlayStation() async {
+    try {
+      final FunctionResponse response =
+          await SupabaseService.client.functions.invoke(
+        'platform-auth',
+        body: const <String, dynamic>{
+          'action': 'playstation_unlink',
+        },
+      );
+
+      final dynamic raw = response.data;
+      if (raw is Map && raw['ok'] == true) {
+        revision.value += 1;
+        return;
+      }
+
+      final String message = raw is Map
+          ? raw['error']?.toString() ?? ''
+          : '';
+
+      throw GamingAccountsException(
+        message.isEmpty
+            ? 'Impossible de délier PlayStation pour le moment.'
+            : message,
+      );
+    } on FunctionException catch (error) {
+      throw GamingAccountsException(
+        _friendlyFunctionError(error.details),
+      );
+    } on GamingAccountsException {
+      rethrow;
+    } catch (error) {
+      throw GamingAccountsException(
+        _friendlyFunctionError(error.toString()),
       );
     }
   }

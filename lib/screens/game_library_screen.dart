@@ -5,6 +5,7 @@ import '../services/game_catalog_service.dart';
 import '../services/game_library_service.dart';
 import '../services/steam_sync_service.dart';
 import '../widgets/game_cover_image.dart';
+import '../widgets/steam_library_sync_progress.dart';
 import 'gaming_accounts_screen.dart';
 
 enum _LibrarySort {
@@ -701,8 +702,8 @@ class _LibraryHeader extends StatelessWidget {
                       ),
                     ),
                     Text(
-                      '$inProgress en cours • $backlog à jouer • '
-                      '$completed terminés',
+                      '$inProgress en cours • $completed terminés • '
+                      '$backlog pas commencés',
                       style: const TextStyle(
                         color: Colors.white54,
                         fontSize: 11.5,
@@ -747,17 +748,11 @@ class _LibraryHeader extends StatelessWidget {
               ),
             ),
           ),
-          if (steamBusy &&
-              steamProgressLabel != null &&
-              steamProgressLabel!.isNotEmpty) ...[
-            const SizedBox(height: 7),
-            Text(
-              steamProgressLabel!,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(color: Colors.white38, fontSize: 10.5),
-            ),
-          ],
+          SteamLibrarySyncProgress(
+            fallbackLabel: steamProgressLabel?.trim().isNotEmpty == true
+                ? steamProgressLabel!.trim()
+                : 'Synchronisation Steam…',
+          ),
         ],
       ),
     );
@@ -2247,7 +2242,6 @@ class _GameEditSheetState extends State<_GameEditSheet> {
                                     ),
                               ),
                             );
-
                       return Container(
                         margin: const EdgeInsets.only(bottom: 7),
                         decoration: BoxDecoration(

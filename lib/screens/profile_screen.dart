@@ -4,12 +4,11 @@ import 'package:project_xp/models/avatar_model.dart';
 import 'package:project_xp/models/game_library_entry.dart';
 import 'package:project_xp/screens/avatar/avatar_choice_screen.dart';
 import 'package:project_xp/screens/avatar/avatar_edit_screen.dart';
-import 'package:project_xp/screens/splash_screen.dart';
+import 'package:project_xp/screens/gaming_accounts_screen.dart';
 import 'package:project_xp/services/auth_service.dart';
 import 'package:project_xp/services/avatar_storage.dart';
 import 'package:project_xp/services/game_library_service.dart';
 import 'package:project_xp/services/profile_storage.dart';
-import 'package:project_xp/services/session_service.dart';
 import 'package:project_xp/services/tavern_profile_service.dart';
 import 'package:project_xp/widgets/avatar_renderer.dart';
 import 'package:project_xp/widgets/brand_icon.dart';
@@ -45,8 +44,13 @@ Brand _brandFromString(String value) {
 
 class ProfileScreen extends StatefulWidget {
   final bool embedded;
+  final ValueChanged<GameLibraryEntry>? onOpenGame;
 
-  const ProfileScreen({super.key, this.embedded = false});
+  const ProfileScreen({
+    super.key,
+    this.embedded = false,
+    this.onOpenGame,
+  });
 
   @override
   State<ProfileScreen> createState() => _ProfileScreenState();
@@ -130,8 +134,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
         }
       }
 
-      // Profil et identité démarrent ensemble. Dès que l'identifiant est connu,
-      // avatar, Bibliothèque et Fil d'aventure se chargent en parallèle.
       final Future<Map<String, dynamic>> profileFuture =
           ProfileStorage.loadProfile();
       final Future<String?> userIdFuture = AuthService.getCurrentUserId();
@@ -159,11 +161,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
       setState(() {
         pseudo = data['pseudo'] as String? ?? 'Mon aventurier';
-
         description =
             data['description'] as String? ??
             "Je cherche des compagnons pour partir à l'aventure !";
-
         chatColor = data['chatColor']?.toString() ?? '#C56CFF';
 
         _legacyGames
@@ -270,27 +270,57 @@ class _ProfileScreenState extends State<ProfileScreen> {
     return saved;
   }
 
-  // ==========================================================================
-  // STATISTIQUES
-  // ==========================================================================
-
   int get _completedGames =>
       _library.where((game) => game.status == GameStatus.completed).length;
 
+  int? _displayCompletion(GameLibraryEntry game) {
+    int best = -1;
+    for (final GamePlatformProfile profile in game.resolvedPlatformProfiles) {
+      final GameAchievementSummary summary = profile.computedAchievementSummary;
+      final int? value = profile.platform == GamePlatform.playstation &&
+              summary.scoreTotal == 100
+          ? summary.scoreEarned.clamp(0, 100).toInt()
+          : profile.completionPercent;
+      if (value != null && value > best) {
+        best = value;
+      }
+    }
+    if (best >= 0) return best;
+    return game.progressPercent > 0 ? game.progressPercent : null;
+  }
+
   int get _hundredPercentGames =>
-      _library.where((game) => game.bestCompletionPercent == 100).length;
+      _library.where((game) => _displayCompletion(game) == 100).length;
+
+  int get _playedGames =>
+      _library.where((game) => game.totalPlaytimeMinutes > 0).length;
+
+  int get _multiPlatformGames => _library
+      .where((game) => game.connectedPlatforms.toSet().length >= 2)
+      .length;
+
+  int get _platinumTrophies {
+    int total = 0;
+    for (final GameLibraryEntry game in _library) {
+      final GamePlatformProfile? ps = game.platformProfile(
+        GamePlatform.playstation,
+      );
+      if (ps != null) {
+        total += ps.computedAchievementSummary.platinumUnlocked;
+      }
+    }
+    return total;
+  }
 
   int get _totalPlaytimeMinutes =>
       _library.fold<int>(0, (sum, game) => sum + game.totalPlaytimeMinutes);
 
   int get _unlockedAchievements {
     int total = 0;
-
     for (final GameLibraryEntry game in _library) {
       for (final GamePlatformProfile profile in game.resolvedPlatformProfiles) {
         final GameAchievementSummary summary =
             profile.computedAchievementSummary;
-
         if (profile.platform == GamePlatform.playstation &&
             summary.unlocked <= 0) {
           total +=
@@ -303,17 +333,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
         }
       }
     }
-
     return total;
   }
 
   String get _playtimeLabel {
     final double hours = _totalPlaytimeMinutes / 60;
-
     if (hours >= 100) {
       return '${hours.round()} h';
     }
-
     return '${hours.toStringAsFixed(1)} h';
   }
 
@@ -343,7 +370,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
         }
       }
 
-      current ??= tiers.first;
+      if (current == null) {
+        final ({int threshold, String title}) first = tiers.first;
+        return _ProfileHighFact(
+          emoji: emoji,
+          title: 'En progression',
+          detail: currentDetail(value),
+          nextMilestone: nextDetail(first.threshold),
+          progress: (value / first.threshold).clamp(0.0, 1.0).toDouble(),
+        );
+      }
 
       final double progress = next == null
           ? 1.0
@@ -367,8 +403,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
         (threshold: 1, title: 'Premier 100 %'),
         (threshold: 5, title: 'Complétionniste'),
         (threshold: 10, title: 'Maître du 100 %'),
-        (threshold: 25, title: 'Légende du 100 %'),
-        (threshold: 50, title: 'Mythe du 100 %'),
+        (threshold: 25, title: 'Collection parfaite'),
+        (threshold: 50, title: 'Légende du 100 %'),
+        (threshold: 100, title: 'Cent mondes maîtrisés'),
+        (threshold: 200, title: 'Archiviste parfait'),
+        (threshold: 350, title: 'Mythe de la complétion'),
+        (threshold: 500, title: 'Éternel complétionniste'),
       ],
       currentDetail: (value) =>
           '$value jeu${value > 1 ? 'x' : ''} complété${value > 1 ? 's' : ''} à 100 %',
@@ -379,12 +419,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
       emoji: '🔥',
       value: _unlockedAchievements,
       tiers: const <({int threshold, String title})>[
-        (threshold: 1, title: 'Premiers succès'),
+        (threshold: 1, title: 'Premier exploit'),
         (threshold: 100, title: 'Chasseur de succès'),
-        (threshold: 500, title: '500e succès'),
-        (threshold: 1000, title: '1000e succès'),
-        (threshold: 2500, title: 'Collectionneur légendaire'),
+        (threshold: 500, title: 'Collectionneur'),
+        (threshold: 1000, title: 'Mille exploits'),
+        (threshold: 2500, title: 'Vétéran des trophées'),
         (threshold: 5000, title: 'Archiviste des exploits'),
+        (threshold: 10000, title: 'Dix mille conquêtes'),
+        (threshold: 20000, title: 'Maître des accomplissements'),
+        (threshold: 50000, title: 'Légende éternelle des exploits'),
       ],
       currentDetail: (value) => '$value succès débloqués',
       nextDetail: (threshold) => 'Prochain palier : $threshold succès',
@@ -399,6 +442,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
         (threshold: 25, title: 'Vétéran'),
         (threshold: 50, title: 'Conquérant'),
         (threshold: 100, title: 'Chroniqueur de mondes'),
+        (threshold: 200, title: 'Grand conquérant'),
+        (threshold: 350, title: 'Maître des bibliothèques'),
+        (threshold: 500, title: 'Légende aux cinq cents aventures'),
+        (threshold: 750, title: 'Voyageur des mille mondes'),
       ],
       currentDetail: (value) =>
           '$value jeu${value > 1 ? 'x' : ''} terminé${value > 1 ? 's' : ''}',
@@ -416,9 +463,59 @@ class _ProfileScreenState extends State<ProfileScreen> {
         (threshold: 1000, title: 'Mille heures d’aventure'),
         (threshold: 2500, title: 'Gardien des mondes'),
         (threshold: 5000, title: 'Légende du temps'),
+        (threshold: 10000, title: 'Dix mille heures de légende'),
+        (threshold: 20000, title: 'Éternel aventurier'),
+        (threshold: 50000, title: 'Hors du temps'),
       ],
       currentDetail: (_) => '$_playtimeLabel cumulées sur tes plateformes',
       nextDetail: (threshold) => 'Prochain palier : $threshold h de jeu',
+    );
+
+    final _ProfileHighFact? playedGames = tier(
+      emoji: '🎮',
+      value: _playedGames,
+      tiers: const <({int threshold, String title})>[
+        (threshold: 10, title: 'Explorateur'),
+        (threshold: 50, title: 'Bibliothèque vivante'),
+        (threshold: 100, title: 'Cent aventures vécues'),
+        (threshold: 250, title: 'Grand explorateur'),
+        (threshold: 500, title: 'Voyageur des mondes'),
+        (threshold: 1000, title: 'Mille jeux parcourus'),
+      ],
+      currentDetail: (value) => '$value jeux réellement lancés',
+      nextDetail: (threshold) => 'Prochain palier : $threshold jeux joués',
+    );
+
+    final _ProfileHighFact? platinums = tier(
+      emoji: '👑',
+      value: _platinumTrophies,
+      tiers: const <({int threshold, String title})>[
+        (threshold: 1, title: 'Premier platine'),
+        (threshold: 5, title: 'Chasseur de platines'),
+        (threshold: 10, title: 'Couronne d’argent'),
+        (threshold: 25, title: 'Maître des platines'),
+        (threshold: 50, title: 'Seigneur des trophées'),
+        (threshold: 100, title: 'Cent couronnes'),
+        (threshold: 250, title: 'Empereur des platines'),
+        (threshold: 500, title: 'Mythe PlayStation'),
+      ],
+      currentDetail: (value) => '$value platine${value > 1 ? 's' : ''} obtenu${value > 1 ? 's' : ''}',
+      nextDetail: (threshold) => 'Prochain palier : $threshold platines',
+    );
+
+    final _ProfileHighFact? multiPlatform = tier(
+      emoji: '🌐',
+      value: _multiPlatformGames,
+      tiers: const <({int threshold, String title})>[
+        (threshold: 1, title: 'Premier pont entre plateformes'),
+        (threshold: 5, title: 'Joueur sans frontières'),
+        (threshold: 10, title: 'Multiplateforme'),
+        (threshold: 25, title: 'Voyageur interplateforme'),
+        (threshold: 50, title: 'Maître des écosystèmes'),
+        (threshold: 100, title: 'Légende sans frontières'),
+      ],
+      currentDetail: (value) => '$value jeux liés sur plusieurs plateformes',
+      nextDetail: (threshold) => 'Prochain palier : $threshold jeux multiplateformes',
     );
 
     for (final _ProfileHighFact? fact in <_ProfileHighFact?>[
@@ -426,6 +523,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
       achievements,
       completed,
       playtime,
+      playedGames,
+      platinums,
+      multiPlatform,
     ]) {
       if (fact != null) {
         result.add(fact);
@@ -439,17 +539,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final List<GameLibraryEntry> favorites = _library
         .where((game) => game.favorite)
         .toList();
-
     favorites.sort(
       (a, b) => b.totalPlaytimeMinutes.compareTo(a.totalPlaytimeMinutes),
     );
-
     return favorites.take(3).toList();
   }
-
-  // ==========================================================================
-  // COULEUR DU CHAT
-  // ==========================================================================
 
   String _chatColorLabel() {
     for (final Map<String, String> option in _chatColors) {
@@ -457,14 +551,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
         return option['name'] ?? 'Couleur personnalisée';
       }
     }
-
     return 'Couleur personnalisée';
   }
 
   Color _chatColorValue(String hex) {
     final String clean = hex.replaceFirst('#', '');
     final int? parsed = int.tryParse('FF$clean', radix: 16);
-
     return Color(parsed ?? 0xffc56cff);
   }
 
@@ -492,7 +584,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     final String name = option['name'] ?? '';
                     final bool active = hex == chatColor;
                     final Color color = _chatColorValue(hex);
-
                     return Tooltip(
                       message: name,
                       child: InkWell(
@@ -562,7 +653,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
     });
 
     final bool saved = await ProfileStorage.saveChatColor(chatColor);
-
     if (saved) {
       await TavernProfileService.syncCurrentProfile();
     }
@@ -603,9 +693,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 final int r = red.round().clamp(0, 255).toInt();
                 final int g = green.round().clamp(0, 255).toInt();
                 final int b = blue.round().clamp(0, 255).toInt();
-
                 final Color preview = Color.fromARGB(255, r, g, b);
-
                 final String hex =
                     ('#${r.toRadixString(16).padLeft(2, '0')}'
                             '${g.toRadixString(16).padLeft(2, '0')}'
@@ -744,10 +832,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  // ==========================================================================
-  // AVATAR
-  // ==========================================================================
-
   Future<void> _openAvatarEditor() async {
     final AvatarModel? currentAvatar = _avatar;
 
@@ -758,27 +842,20 @@ class _ProfileScreenState extends State<ProfileScreen> {
           builder: (context) => const AvatarChoiceScreen(),
         ),
       );
-
       if (!mounted) {
         return;
       }
-
       final String? userId = await AuthService.getCurrentUserId();
-
       if (userId == null) {
         return;
       }
-
       final AvatarModel? newAvatar = await AvatarStorage.loadAvatar(userId);
-
       if (!mounted) {
         return;
       }
-
       setState(() {
         _avatar = newAvatar;
       });
-
       return;
     }
 
@@ -788,90 +865,20 @@ class _ProfileScreenState extends State<ProfileScreen> {
         builder: (context) => AvatarEditScreen(initialAvatar: currentAvatar),
       ),
     );
-
     if (result == null || !mounted) {
       return;
     }
-
     await AvatarStorage.saveAvatar(result);
-
     if (!mounted) {
       return;
     }
-
     setState(() {
       _avatar = result;
     });
-
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(const SnackBar(content: Text('Avatar modifié !')));
   }
-
-  // ==========================================================================
-  // DÉCONNEXION
-  // ==========================================================================
-
-  Future<void> _logout() async {
-    final bool? confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) {
-        return AlertDialog(
-          backgroundColor: const Color(0xff2b1a12),
-          title: const Text(
-            'Déconnexion',
-            style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold),
-          ),
-          content: const Text(
-            'Tu veux vraiment te déconnecter de Project XP ?',
-            style: TextStyle(color: Colors.white70),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Navigator.pop(dialogContext, false);
-              },
-              child: const Text(
-                'ANNULER',
-                style: TextStyle(color: Colors.white70),
-              ),
-            ),
-            TextButton(
-              onPressed: () {
-                Navigator.pop(dialogContext, true);
-              },
-              child: const Text(
-                'SE DÉCONNECTER',
-                style: TextStyle(
-                  color: Colors.redAccent,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ),
-          ],
-        );
-      },
-    );
-
-    if (confirmed != true) {
-      return;
-    }
-
-    await SessionService.logout();
-
-    if (!mounted) {
-      return;
-    }
-
-    Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute<void>(builder: (context) => const SplashScreen()),
-      (route) => false,
-    );
-  }
-
-  // ==========================================================================
-  // BUILD
-  // ==========================================================================
 
   @override
   Widget build(BuildContext context) {
@@ -879,11 +886,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
       final Widget loading = const Center(
         child: CircularProgressIndicator(color: Colors.amber),
       );
-
       if (widget.embedded) {
         return Container(color: const Color(0xff1b120d), child: loading);
       }
-
       return Scaffold(backgroundColor: const Color(0xff1b120d), body: loading);
     }
 
@@ -899,7 +904,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         color: Colors.amber,
         onRefresh: _loadEverything,
         child: ListView(
-          padding: EdgeInsets.fromLTRB(16, 18, 16, 28),
+          padding: const EdgeInsets.fromLTRB(16, 18, 16, 28),
           children: [
             _buildIdentityCard(),
             const SizedBox(height: 22),
@@ -937,31 +942,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
             _buildRecentExploits(),
             const SizedBox(height: 24),
             _buildProfileActions(),
-            const SizedBox(height: 20),
-            const Divider(color: Colors.white12),
-            const SizedBox(height: 14),
-            SizedBox(
-              width: double.infinity,
-              height: 50,
-              child: OutlinedButton.icon(
-                onPressed: _logout,
-                icon: const Icon(Icons.logout),
-                label: const Text(
-                  'SE DÉCONNECTER',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: 0.8,
-                  ),
-                ),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: Colors.redAccent,
-                  side: const BorderSide(color: Colors.redAccent),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                ),
-              ),
-            ),
           ],
         ),
       ),
@@ -1207,7 +1187,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   Widget _buildAvatar() {
     final AvatarModel? avatar = _avatar;
-
     if (avatar == null) {
       return Container(
         width: 112,
@@ -1219,7 +1198,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
         child: const Icon(Icons.person, color: Colors.amber, size: 56),
       );
     }
-
     return AvatarRenderer(avatar: avatar, size: 112);
   }
 
@@ -1360,7 +1338,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   Widget _buildHighFacts() {
     final List<_ProfileHighFact> facts = _highFacts;
-
     if (facts.isEmpty) {
       return const _EmptyProfileBlock(
         icon: Icons.lock_outline_rounded,
@@ -1369,7 +1346,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
             'Termine une aventure, débloque des succès ou atteins ton premier 100 %.',
       );
     }
-
     return Column(
       children: List<Widget>.generate(facts.length, (int index) {
         return Padding(
@@ -1382,7 +1358,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   Widget _buildShowcase() {
     final List<GameLibraryEntry> games = _showcaseGames;
-
     if (games.isEmpty) {
       return const _EmptyProfileBlock(
         icon: Icons.star_border_rounded,
@@ -1391,7 +1366,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
             'Ajoute des jeux en favoris dans ta Bibliothèque pour les mettre en avant ici.',
       );
     }
-
     return SizedBox(
       height: 154,
       child: ListView.separated(
@@ -1399,7 +1373,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
         itemCount: games.length,
         separatorBuilder: (_, _) => const SizedBox(width: 10),
         itemBuilder: (context, index) {
-          return _ShowcaseGameCard(game: games[index]);
+          return _ShowcaseGameCard(
+            game: games[index],
+            onTap: widget.onOpenGame == null
+                ? null
+                : () => widget.onOpenGame!(games[index]),
+          );
         },
       ),
     );
@@ -1414,7 +1393,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
             'Le Fil d’aventure se remplira avec tes vraies actions : jeux terminés, succès et accomplissements.',
       );
     }
-
     return Container(
       decoration: BoxDecoration(
         color: const Color(0xff1a1c1f),
@@ -1424,7 +1402,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
       child: Column(
         children: List<Widget>.generate(_recentActivity.length, (index) {
           final GamingActivityEvent event = _recentActivity[index];
-
           return Column(
             children: [
               _RecentExploitTile(
@@ -1444,52 +1421,26 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final DateTime now = DateTime.now();
     final DateTime today = DateTime(now.year, now.month, now.day);
     final DateTime target = DateTime(date.year, date.month, date.day);
-
     final int days = today.difference(target).inDays;
-
-    if (days == 0) {
-      return 'Aujourd’hui';
-    }
-
-    if (days == 1) {
-      return 'Hier';
-    }
-
+    if (days == 0) return 'Aujourd’hui';
+    if (days == 1) return 'Hier';
     return '${date.day.toString().padLeft(2, '0')}/'
         '${date.month.toString().padLeft(2, '0')}';
   }
 
-  // ==========================================================================
-  // SOUS-TITRES
-  // ==========================================================================
-
   String _getAvailabilitySubtitle() {
     int total = 0;
-
     for (final List<String> slots in disponibilites.values) {
       total += slots.length;
     }
-
-    if (total == 0) {
-      return 'Aucune disponibilité configurée';
-    }
-
-    if (total == 1) {
-      return '1 créneau configuré';
-    }
-
+    if (total == 0) return 'Aucune disponibilité configurée';
+    if (total == 1) return '1 créneau configuré';
     return '$total créneaux configurés';
   }
 
   String _getNetworksSubtitle() {
-    if (reseaux.isEmpty) {
-      return 'Aucun réseau configuré';
-    }
-
-    if (reseaux.length == 1) {
-      return '1 réseau configuré';
-    }
-
+    if (reseaux.isEmpty) return 'Aucun réseau configuré';
+    if (reseaux.length == 1) return '1 réseau configuré';
     return '${reseaux.length} réseaux configurés';
   }
 
@@ -1544,7 +1495,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                               ),
                             ),
                             Text(
-                              'Personnalise ta fiche sans mélanger profil, bibliothèque et comptes.',
+                              'Personnalise ta fiche et gère tes comptes de jeu.',
                               style: TextStyle(
                                 color: Colors.white38,
                                 fontSize: 10.5,
@@ -1576,6 +1527,21 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     onTap: () {
                       Navigator.pop(sheetContext);
                       _openAvatarEditor();
+                    },
+                  ),
+                  const SizedBox(height: 10),
+                  _ProfileOption(
+                    icon: '🎮',
+                    title: 'COMPTES DE JEU',
+                    subtitle: 'Steam, PlayStation, Xbox, Nintendo et Epic',
+                    onTap: () {
+                      Navigator.pop(sheetContext);
+                      Navigator.push<void>(
+                        context,
+                        MaterialPageRoute<void>(
+                          builder: (context) => const GamingAccountsScreen(),
+                        ),
+                      );
                     },
                   ),
                   const SizedBox(height: 10),
@@ -1617,14 +1583,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  // ==========================================================================
-  // MODIFIER PROFIL
-  // ==========================================================================
-
   Future<void> _showEditProfilePopup() async {
     String draftPseudo = pseudo;
     String draftDescription = description;
-
     await showDialog<void>(
       context: context,
       builder: (dialogContext) {
@@ -1642,9 +1603,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 TextFormField(
                   initialValue: draftPseudo,
                   maxLength: 24,
-                  onChanged: (value) {
-                    draftPseudo = value;
-                  },
+                  onChanged: (value) => draftPseudo = value,
                   style: const TextStyle(color: Colors.white),
                   decoration: const InputDecoration(
                     labelText: 'Pseudo',
@@ -1660,9 +1619,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   minLines: 3,
                   maxLines: 5,
                   maxLength: 180,
-                  onChanged: (value) {
-                    draftDescription = value;
-                  },
+                  onChanged: (value) => draftDescription = value,
                   style: const TextStyle(color: Colors.white),
                   decoration: const InputDecoration(
                     labelText: 'Description',
@@ -1687,41 +1644,25 @@ class _ProfileScreenState extends State<ProfileScreen> {
               onPressed: () async {
                 final String newPseudo = draftPseudo.trim();
                 final String newDescription = draftDescription.trim();
-
-                if (newPseudo.isEmpty) {
-                  return;
-                }
-
+                if (newPseudo.isEmpty) return;
                 final String? currentUserId =
                     await AuthService.getCurrentUserId();
-
                 final bool available = await AuthService.isUsernameAvailable(
                   newPseudo,
                   excludeUserId: currentUserId,
                 );
-
-                if (!dialogContext.mounted) {
-                  return;
-                }
-
+                if (!dialogContext.mounted) return;
                 if (!available) {
                   ScaffoldMessenger.of(dialogContext).showSnackBar(
-                    const SnackBar(
-                      content: Text('Ce pseudo est déjà utilisé.'),
-                    ),
+                    const SnackBar(content: Text('Ce pseudo est déjà utilisé.')),
                   );
                   return;
                 }
-
                 final bool saved = await _saveProfile(
                   pseudoOverride: newPseudo,
                   descriptionOverride: newDescription,
                 );
-
-                if (!dialogContext.mounted) {
-                  return;
-                }
-
+                if (!dialogContext.mounted) return;
                 if (!saved) {
                   ScaffoldMessenger.of(dialogContext).showSnackBar(
                     const SnackBar(
@@ -1730,23 +1671,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   );
                   return;
                 }
-
-                if (!mounted) {
-                  return;
-                }
-
+                if (!mounted) return;
                 setState(() {
                   pseudo = newPseudo;
                   description = newDescription;
                 });
-
                 FocusScope.of(dialogContext).unfocus();
                 Navigator.pop(dialogContext);
-
-                if (!mounted) {
-                  return;
-                }
-
+                if (!mounted) return;
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(content: Text('Profil sauvegardé !')),
                 );
@@ -1765,16 +1697,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  // ==========================================================================
-  // DISPONIBILITÉS
-  // ==========================================================================
-
   void _showAvailabilityPopup() {
     final Map<String, List<String>> workingCopy = <String, List<String>>{
       for (final String day in _jours)
         day: List<String>.from(disponibilites[day] ?? <String>[]),
     };
-
     showDialog<void>(
       context: context,
       builder: (dialogContext) {
@@ -1796,23 +1723,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 child: ListView(
                   children: _jours.map((day) {
                     final List<String> slots = workingCopy[day] ?? <String>[];
-
                     return _AvailabilityDay(
                       day: day,
                       slots: slots,
                       onAdd: () {
-                        if (slots.length >= 3) {
-                          return;
-                        }
-
-                        setPopupState(() {
-                          slots.add('20h -> 23h');
-                        });
+                        if (slots.length >= 3) return;
+                        setPopupState(() => slots.add('20h -> 23h'));
                       },
                       onRemove: (index) {
-                        setPopupState(() {
-                          slots.removeAt(index);
-                        });
+                        setPopupState(() => slots.removeAt(index));
                       },
                       onEditStart: (index) async {
                         await _editAvailabilityTime(
@@ -1840,9 +1759,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               ),
               actions: [
                 TextButton(
-                  onPressed: () {
-                    Navigator.pop(dialogContext);
-                  },
+                  onPressed: () => Navigator.pop(dialogContext),
                   child: const Text(
                     'ANNULER',
                     style: TextStyle(color: Colors.white70),
@@ -1860,13 +1777,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           ),
                         );
                     });
-
                     await _saveProfile();
-
-                    if (!dialogContext.mounted) {
-                      return;
-                    }
-
+                    if (!dialogContext.mounted) return;
                     Navigator.pop(dialogContext);
                   },
                   child: const Text(
@@ -1894,33 +1806,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
     required StateSetter setPopupState,
   }) async {
     final List<String> slots = workingCopy[day] ?? <String>[];
-
-    if (index < 0 || index >= slots.length) {
-      return;
-    }
-
+    if (index < 0 || index >= slots.length) return;
     final List<String> parts = slots[index].split('->');
-
-    if (parts.length != 2) {
-      return;
-    }
-
+    if (parts.length != 2) return;
     final String start = parts[0].trim();
     final String end = parts[1].trim();
-
     final TimeOfDay initial = _parseTime(editStart ? start : end);
-
     final TimeOfDay? selected = await showTimePicker(
       context: context,
       initialTime: initial,
     );
-
-    if (selected == null) {
-      return;
-    }
-
+    if (selected == null) return;
     final String newTime = _formatTime(selected);
-
     setPopupState(() {
       slots[index] = editStart ? '$newTime -> $end' : '$start -> $newTime';
     });
@@ -1931,31 +1828,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
         .replaceAll('h', ':')
         .replaceAll('::', ':')
         .trim();
-
     final List<String> parts = cleaned.split(':');
-
     final int hour = int.tryParse(parts.first) ?? 20;
-
     final int minute = parts.length > 1 ? int.tryParse(parts[1]) ?? 0 : 0;
-
     return TimeOfDay(hour: hour.clamp(0, 23), minute: minute.clamp(0, 59));
   }
 
   String _formatTime(TimeOfDay time) {
-    if (time.minute == 0) {
-      return '${time.hour}h';
-    }
-
+    if (time.minute == 0) return '${time.hour}h';
     final String hour = time.hour.toString().padLeft(2, '0');
-
     final String minute = time.minute.toString().padLeft(2, '0');
-
     return '$hour:$minute';
   }
-
-  // ==========================================================================
-  // RÉSEAUX
-  // ==========================================================================
 
   void _showNetworksPopup() {
     showDialog<void>(
@@ -1990,7 +1874,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         separatorBuilder: (_, _) => const SizedBox(height: 8),
                         itemBuilder: (context, index) {
                           final Map<String, String> network = reseaux[index];
-
                           return _NetworkCard(
                             name: network['nom'] ?? 'Réseau',
                             username: network['pseudo'] ?? '',
@@ -2037,15 +1920,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                   );
                                 },
                               );
-
-                              if (confirmed != true) {
-                                return;
-                              }
-
-                              setState(() {
-                                reseaux.removeAt(index);
-                              });
-
+                              if (confirmed != true) return;
+                              setState(() => reseaux.removeAt(index));
                               await _saveProfile();
                               setPopupState(() {});
                             },
@@ -2056,7 +1932,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                     ? 'Prive'
                                     : 'Visible';
                               });
-
                               await _saveProfile();
                               setPopupState(() {});
                             },
@@ -2077,9 +1952,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   ),
                 ),
                 TextButton(
-                  onPressed: () {
-                    Navigator.pop(dialogContext);
-                  },
+                  onPressed: () => Navigator.pop(dialogContext),
                   child: const Text(
                     'FERMER',
                     style: TextStyle(color: Colors.amber),
@@ -2096,7 +1969,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Future<void> _showAddNetworkPopup() async {
     String selectedNetwork = 'Discord';
     String draftUsername = '';
-
     await showDialog<void>(
       context: context,
       builder: (dialogContext) {
@@ -2143,21 +2015,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       ),
                     ],
                     onChanged: (value) {
-                      if (value == null) {
-                        return;
-                      }
-
-                      setPopupState(() {
-                        selectedNetwork = value;
-                      });
+                      if (value == null) return;
+                      setPopupState(() => selectedNetwork = value);
                     },
                   ),
                   const SizedBox(height: 12),
                   TextFormField(
                     initialValue: draftUsername,
-                    onChanged: (value) {
-                      draftUsername = value;
-                    },
+                    onChanged: (value) => draftUsername = value,
                     style: const TextStyle(color: Colors.white),
                     decoration: const InputDecoration(
                       labelText: 'Pseudo / identifiant',
@@ -2170,7 +2035,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 TextButton(
                   onPressed: () {
                     FocusScope.of(dialogContext).unfocus();
-
                     Navigator.pop(dialogContext);
                   },
                   child: const Text(
@@ -2181,15 +2045,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 TextButton(
                   onPressed: () async {
                     final String username = draftUsername.trim();
-
-                    if (username.isEmpty) {
-                      return;
-                    }
-
+                    if (username.isEmpty) return;
                     final bool exists = reseaux.any(
                       (item) => item['nom'] == selectedNetwork,
                     );
-
                     if (exists) {
                       ScaffoldMessenger.of(dialogContext).showSnackBar(
                         SnackBar(
@@ -2198,7 +2057,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       );
                       return;
                     }
-
                     setState(() {
                       reseaux.add(<String, String>{
                         'nom': selectedNetwork,
@@ -2206,15 +2064,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         'visibilite': 'Prive',
                       });
                     });
-
                     await _saveProfile();
-
-                    if (!dialogContext.mounted) {
-                      return;
-                    }
-
+                    if (!dialogContext.mounted) return;
                     FocusScope.of(dialogContext).unfocus();
-
                     Navigator.pop(dialogContext);
                   },
                   child: const Text(
@@ -2234,14 +2086,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _showEditNetworkPopup(int index) async {
-    if (index < 0 || index >= reseaux.length) {
-      return;
-    }
-
+    if (index < 0 || index >= reseaux.length) return;
     final Map<String, String> network = reseaux[index];
-
     String draftUsername = network['pseudo'] ?? '';
-
     await showDialog<void>(
       context: context,
       builder: (dialogContext) {
@@ -2258,9 +2105,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           content: TextFormField(
             initialValue: draftUsername,
             autofocus: true,
-            onChanged: (value) {
-              draftUsername = value;
-            },
+            onChanged: (value) => draftUsername = value,
             style: const TextStyle(color: Colors.white),
             decoration: const InputDecoration(
               labelText: 'Pseudo / identifiant',
@@ -2281,21 +2126,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
             TextButton(
               onPressed: () async {
                 final String username = draftUsername.trim();
-
-                if (username.isEmpty) {
-                  return;
-                }
-
-                setState(() {
-                  network['pseudo'] = username;
-                });
-
+                if (username.isEmpty) return;
+                setState(() => network['pseudo'] = username);
                 await _saveProfile();
-
-                if (!dialogContext.mounted) {
-                  return;
-                }
-
+                if (!dialogContext.mounted) return;
                 FocusScope.of(dialogContext).unfocus();
                 Navigator.pop(dialogContext);
               },
@@ -2313,10 +2147,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 }
-
-// =============================================================================
-// ÉLÉMENTS DU NOUVEAU PROFIL
-// =============================================================================
 
 class _ProfileStatCell extends StatelessWidget {
   final String emoji;
@@ -2368,14 +2198,12 @@ class _ProfileStatCell extends StatelessWidget {
         ),
       ],
     );
-
     return centered ? Center(child: content) : content;
   }
 }
 
 class _ProfileStatDivider extends StatelessWidget {
   const _ProfileStatDivider();
-
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -2393,7 +2221,6 @@ class _ProfileHighFact {
   final String detail;
   final String nextMilestone;
   final double progress;
-
   const _ProfileHighFact({
     required this.emoji,
     required this.title,
@@ -2405,9 +2232,7 @@ class _ProfileHighFact {
 
 class _HighFactCard extends StatelessWidget {
   final _ProfileHighFact fact;
-
   const _HighFactCard({required this.fact});
-
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -2531,82 +2356,93 @@ class _HighFactCard extends StatelessWidget {
 
 class _ShowcaseGameCard extends StatelessWidget {
   final GameLibraryEntry game;
+  final VoidCallback? onTap;
 
-  const _ShowcaseGameCard({required this.game});
+  const _ShowcaseGameCard({required this.game, this.onTap});
 
   @override
   Widget build(BuildContext context) {
     return SizedBox(
       width: 108,
-      child: Container(
-        decoration: BoxDecoration(
-          color: const Color(0xff1a1c1f),
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(14),
+        child: InkWell(
+          onTap: onTap,
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: Colors.amber.withValues(alpha: 0.42)),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.20),
-              blurRadius: 8,
-              offset: const Offset(0, 4),
+          child: Container(
+            decoration: BoxDecoration(
+              color: const Color(0xff1a1c1f),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: Colors.amber.withValues(alpha: 0.42)),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.20),
+                  blurRadius: 8,
+                  offset: const Offset(0, 4),
+                ),
+              ],
             ),
-          ],
-        ),
-        clipBehavior: Clip.antiAlias,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Expanded(
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  GameCoverImage(
-                    game: game,
-                    width: 108,
-                    height: 108,
-                    fit: BoxFit.cover,
+            clipBehavior: Clip.antiAlias,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      GameCoverImage(
+                        game: game,
+                        width: 108,
+                        height: 108,
+                        fit: BoxFit.cover,
+                      ),
+                      Positioned(
+                        top: 5,
+                        right: 5,
+                        child: Container(
+                          width: 25,
+                          height: 25,
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: const Color(
+                              0xff111315,
+                            ).withValues(alpha: 0.92),
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: Colors.amber.withValues(alpha: 0.65),
+                            ),
+                          ),
+                          child: const Text(
+                            '★',
+                            style: TextStyle(
+                              color: Color(0xffffc857),
+                              fontSize: 14,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
-                  Positioned(
-                    top: 5,
-                    right: 5,
-                    child: Container(
-                      width: 25,
-                      height: 25,
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        color: const Color(0xff111315).withValues(alpha: 0.92),
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: Colors.amber.withValues(alpha: 0.65),
-                        ),
-                      ),
-                      child: const Text(
-                        '★',
-                        style: TextStyle(
-                          color: Color(0xffffc857),
-                          fontSize: 14,
-                        ),
-                      ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(7, 6, 7, 7),
+                  child: Text(
+                    game.title,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 9.5,
+                      height: 1.12,
+                      fontWeight: FontWeight.w800,
                     ),
                   ),
-                ],
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(7, 6, 7, 7),
-              child: Text(
-                game.title,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 9.5,
-                  height: 1.12,
-                  fontWeight: FontWeight.w800,
                 ),
-              ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );
@@ -2616,9 +2452,7 @@ class _ShowcaseGameCard extends StatelessWidget {
 class _RecentExploitTile extends StatelessWidget {
   final GamingActivityEvent event;
   final String dateLabel;
-
   const _RecentExploitTile({required this.event, required this.dateLabel});
-
   @override
   Widget build(BuildContext context) {
     return Padding(
@@ -2692,13 +2526,11 @@ class _EmptyProfileBlock extends StatelessWidget {
   final IconData icon;
   final String title;
   final String detail;
-
   const _EmptyProfileBlock({
     required this.icon,
     required this.title,
     required this.detail,
   });
-
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -2737,23 +2569,17 @@ class _EmptyProfileBlock extends StatelessWidget {
   }
 }
 
-// =============================================================================
-// OPTION DE PROFIL
-// =============================================================================
-
 class _ProfileOption extends StatelessWidget {
   final String icon;
   final String title;
   final String subtitle;
   final VoidCallback onTap;
-
   const _ProfileOption({
     required this.icon,
     required this.title,
     required this.subtitle,
     required this.onTap,
   });
-
   @override
   Widget build(BuildContext context) {
     return SizedBox(
@@ -2810,10 +2636,6 @@ class _ProfileOption extends StatelessWidget {
   }
 }
 
-// =============================================================================
-// DISPONIBILITÉS
-// =============================================================================
-
 class _AvailabilityDay extends StatelessWidget {
   final String day;
   final List<String> slots;
@@ -2821,7 +2643,6 @@ class _AvailabilityDay extends StatelessWidget {
   final ValueChanged<int> onRemove;
   final ValueChanged<int> onEditStart;
   final ValueChanged<int> onEditEnd;
-
   const _AvailabilityDay({
     required this.day,
     required this.slots,
@@ -2830,7 +2651,6 @@ class _AvailabilityDay extends StatelessWidget {
     required this.onEditStart,
     required this.onEditEnd,
   });
-
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -2890,22 +2710,17 @@ class _AvailabilitySlot extends StatelessWidget {
   final VoidCallback onEditStart;
   final VoidCallback onEditEnd;
   final VoidCallback onRemove;
-
   const _AvailabilitySlot({
     required this.value,
     required this.onEditStart,
     required this.onEditEnd,
     required this.onRemove,
   });
-
   @override
   Widget build(BuildContext context) {
     final List<String> parts = value.split('->');
-
     final String start = parts.isNotEmpty ? parts[0].trim() : '--';
-
     final String end = parts.length > 1 ? parts[1].trim() : '--';
-
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(8),
@@ -2944,13 +2759,11 @@ class _TimeButton extends StatelessWidget {
   final String label;
   final String value;
   final VoidCallback onTap;
-
   const _TimeButton({
     required this.label,
     required this.value,
     required this.onTap,
   });
-
   @override
   Widget build(BuildContext context) {
     return InkWell(
@@ -2984,10 +2797,6 @@ class _TimeButton extends StatelessWidget {
   }
 }
 
-// =============================================================================
-// RÉSEAUX
-// =============================================================================
-
 class _NetworkCard extends StatelessWidget {
   final String name;
   final String username;
@@ -2995,7 +2804,6 @@ class _NetworkCard extends StatelessWidget {
   final VoidCallback onEdit;
   final VoidCallback onDelete;
   final VoidCallback onToggleVisibility;
-
   const _NetworkCard({
     required this.name,
     required this.username,
@@ -3004,11 +2812,9 @@ class _NetworkCard extends StatelessWidget {
     required this.onDelete,
     required this.onToggleVisibility,
   });
-
   @override
   Widget build(BuildContext context) {
     final bool isVisible = visibility == 'Visible';
-
     return Container(
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
@@ -3058,13 +2864,8 @@ class _NetworkCard extends StatelessWidget {
             color: const Color(0xff2b1a12),
             iconColor: Colors.white70,
             onSelected: (value) {
-              if (value == 'edit') {
-                onEdit();
-              }
-
-              if (value == 'delete') {
-                onDelete();
-              }
+              if (value == 'edit') onEdit();
+              if (value == 'delete') onDelete();
             },
             itemBuilder: (context) => const [
               PopupMenuItem(value: 'edit', child: Text('Modifier')),

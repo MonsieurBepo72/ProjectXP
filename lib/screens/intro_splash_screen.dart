@@ -2,31 +2,24 @@ import 'package:flutter/material.dart';
 
 import '../services/auth_service.dart';
 import '../services/avatar_storage.dart';
+import '../services/session_service.dart';
 
 import 'auth_screen.dart';
 import 'avatar/avatar_choice_screen.dart';
 import 'hall_screen.dart';
 
 class IntroSplashScreen extends StatefulWidget {
-  const IntroSplashScreen({
-    super.key,
-  });
+  const IntroSplashScreen({super.key});
 
   @override
-  State<IntroSplashScreen> createState() =>
-      _IntroSplashScreenState();
+  State<IntroSplashScreen> createState() => _IntroSplashScreenState();
 }
 
-class _IntroSplashScreenState
-    extends State<IntroSplashScreen>
+class _IntroSplashScreenState extends State<IntroSplashScreen>
     with SingleTickerProviderStateMixin {
-  static const Duration _nextScreenFadeDuration =
-      Duration(
-    milliseconds: 2000,
-  );
+  static const Duration _nextScreenFadeDuration = Duration(milliseconds: 2000);
 
   late final AnimationController _controller;
-
   late final Animation<double> _fadeAnimation;
   late final Animation<double> _scaleAnimation;
 
@@ -38,50 +31,31 @@ class _IntroSplashScreenState
 
     _controller = AnimationController(
       vsync: this,
-      duration: const Duration(
-        milliseconds: 8000,
-      ),
+      duration: const Duration(milliseconds: 8000),
     );
 
     _fadeAnimation = TweenSequence<double>(
-      [
+      <TweenSequenceItem<double>>[
         TweenSequenceItem<double>(
-          tween: Tween<double>(
-            begin: 0.0,
-            end: 1.0,
-          ).chain(
-            CurveTween(
-              curve: Curves.easeOut,
-            ),
+          tween: Tween<double>(begin: 0.0, end: 1.0).chain(
+            CurveTween(curve: Curves.easeOut),
           ),
           weight: 20,
         ),
         TweenSequenceItem<double>(
-          tween: ConstantTween<double>(
-            1.0,
-          ),
+          tween: ConstantTween<double>(1.0),
           weight: 55,
         ),
         TweenSequenceItem<double>(
-          tween: Tween<double>(
-            begin: 1.0,
-            end: 0.0,
-          ).chain(
-            CurveTween(
-              curve: Curves.easeIn,
-            ),
+          tween: Tween<double>(begin: 1.0, end: 0.0).chain(
+            CurveTween(curve: Curves.easeIn),
           ),
           weight: 25,
         ),
       ],
-    ).animate(
-      _controller,
-    );
+    ).animate(_controller);
 
-    _scaleAnimation = Tween<double>(
-      begin: 1.0,
-      end: 1.04,
-    ).animate(
+    _scaleAnimation = Tween<double>(begin: 1.0, end: 1.04).animate(
       CurvedAnimation(
         parent: _controller,
         curve: Curves.easeInOut,
@@ -92,8 +66,7 @@ class _IntroSplashScreenState
   }
 
   Future<void> _startIntro() async {
-    final Future<Widget> destinationFuture =
-        _getDestination();
+    final Future<Widget> destinationFuture = _getDestination();
 
     await _controller.forward();
 
@@ -101,38 +74,33 @@ class _IntroSplashScreenState
       return;
     }
 
-    final Widget destination =
-        await destinationFuture;
+    final Widget destination = await destinationFuture;
 
     if (!mounted) {
       return;
     }
 
-    await _openNextScreen(
-      destination,
-    );
+    await _openNextScreen(destination);
   }
 
   Future<Widget> _getDestination() async {
-    final bool isLoggedIn =
-        await AuthService.isLoggedIn();
+    // Étape 04A.2 : ce point d'entrée valide désormais la vraie session locale
+    // ET l'alignement Cloud avant d'autoriser l'accès au Hall. Pour les anciens
+    // comptes dont le statut Cloud n'est pas encore classé, une reconnexion par
+    // mot de passe sera demandée une seule fois.
+    final bool sessionValid = await SessionService.validateSessionAtStartup();
 
-    if (!isLoggedIn) {
+    if (!sessionValid) {
       return const AuthScreen();
     }
 
-    final String? userId =
-        await AuthService.getCurrentUserId();
+    final String? userId = await AuthService.getCurrentUserId();
 
-    if (userId == null ||
-        userId.trim().isEmpty) {
+    if (userId == null || userId.trim().isEmpty) {
       return const AuthScreen();
     }
 
-    final bool hasAvatar =
-        await AvatarStorage.hasAvatar(
-      userId,
-    );
+    final bool hasAvatar = await AvatarStorage.hasAvatar(userId);
 
     if (!hasAvatar) {
       return const AvatarChoiceScreen();
@@ -141,9 +109,7 @@ class _IntroSplashScreenState
     return const HallScreen();
   }
 
-  Future<void> _openNextScreen(
-    Widget destination,
-  ) async {
+  Future<void> _openNextScreen(Widget destination) async {
     if (_navigationStarted) {
       return;
     }
@@ -156,25 +122,16 @@ class _IntroSplashScreenState
 
     await Navigator.of(context).pushReplacement(
       PageRouteBuilder<void>(
-        transitionDuration:
-            _nextScreenFadeDuration,
-        reverseTransitionDuration:
-            _nextScreenFadeDuration,
-        pageBuilder: (
-          context,
-          animation,
-          secondaryAnimation,
-        ) {
-          return destination;
-        },
+        transitionDuration: _nextScreenFadeDuration,
+        reverseTransitionDuration: _nextScreenFadeDuration,
+        pageBuilder: (context, animation, secondaryAnimation) => destination,
         transitionsBuilder: (
           context,
           animation,
           secondaryAnimation,
           child,
         ) {
-          final Animation<double> fadeAnimation =
-              CurvedAnimation(
+          final Animation<double> fadeAnimation = CurvedAnimation(
             parent: animation,
             curve: Curves.easeOut,
           );
@@ -189,9 +146,7 @@ class _IntroSplashScreenState
   }
 
   @override
-  Widget build(
-    BuildContext context,
-  ) {
+  Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
       body: SafeArea(
@@ -201,19 +156,13 @@ class _IntroSplashScreenState
             child: ScaleTransition(
               scale: _scaleAnimation,
               child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                ),
+                padding: const EdgeInsets.symmetric(horizontal: 12),
                 child: Image.asset(
                   'assets/images/project_xp_intro.png',
                   width: double.infinity,
                   fit: BoxFit.contain,
                   filterQuality: FilterQuality.high,
-                  errorBuilder: (
-                    context,
-                    error,
-                    stackTrace,
-                  ) {
+                  errorBuilder: (context, error, stackTrace) {
                     return const Text(
                       'PROJECT XP',
                       textAlign: TextAlign.center,

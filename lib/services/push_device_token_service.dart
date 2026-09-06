@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 
+import 'auth_service.dart';
 import 'supabase_service.dart';
 
 class PushDeviceTokenService {
@@ -12,6 +13,16 @@ class PushDeviceTokenService {
     final String cleanToken = token.trim();
 
     if (cleanToken.isEmpty) {
+      return false;
+    }
+
+    final bool localLoggedIn =
+        await AuthService.isLoggedIn();
+
+    if (!localLoggedIn) {
+      debugPrint(
+        'Token FCM non enregistré : aucun compte Project XP local connecté.',
+      );
       return false;
     }
 

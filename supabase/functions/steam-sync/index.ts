@@ -326,7 +326,39 @@ async function syncAchievements(body: JsonRecord, apiKey: string) {
   playerUrl.searchParams.set('appid', appId)
   playerUrl.searchParams.set('l', 'french')
 
-  const raw = await steamJson(playerUrl)
+  let raw: unknown
+
+  try {
+    raw = await steamJson(playerUrl)
+  } catch (error) {
+    // Certains jeux Steam n'exposent tout simplement aucune statistique ni
+    // aucun succès. L'API répond alors parfois en HTTP 400 avec un message
+    // "no stats" au lieu d'un JSON playerstats.success=false. Ce cas n'est
+    // pas une panne et ne doit pas finir dans la liste "à revoir".
+    const steamError =
+      error instanceof Error ? error.message : String(error ?? '')
+    const normalizedError = steamError.toLowerCase()
+    const noAchievementSupport =
+      normalizedError.includes('no stats') ||
+      normalizedError.includes('does not have stats') ||
+      normalizedError.includes('no achievements')
+
+    if (noAchievementSupport) {
+      return jsonResponse({
+        ok: true,
+        steamId,
+        appId,
+        gameName: '',
+        unlocked: 0,
+        total: 0,
+        achievements: [],
+        noAchievements: true,
+      })
+    }
+
+    throw error
+  }
+
   const playerstats =
     raw && typeof raw === 'object'
       ? (raw as JsonRecord).playerstats
