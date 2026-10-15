@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -5,9 +6,15 @@ import 'package:flutter/material.dart';
 import '../services/gaming_accounts_service.dart';
 import '../services/playstation_sync_service.dart';
 import '../services/steam_sync_service.dart';
+import 'hall_screen.dart';
 
 class GamingAccountsScreen extends StatefulWidget {
-  const GamingAccountsScreen({super.key});
+  final bool onboarding;
+
+  const GamingAccountsScreen({
+    super.key,
+    this.onboarding = false,
+  });
 
   @override
   State<GamingAccountsScreen> createState() =>
@@ -49,10 +56,75 @@ class _GamingAccountsScreenState extends State<GamingAccountsScreen> {
     if (message.isEmpty || !mounted) {
       return;
     }
+
+    final bool steamLinked = message == 'Compte Steam lié avec succès.';
+
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(message)),
     );
     GamingAccountsService.lastCallbackMessage.value = null;
+
+    if (steamLinked) {
+      unawaited(_syncSteamAfterLink());
+    }
+  }
+
+  Future<void> _syncSteamAfterLink() async {
+    if (_busy) {
+      return;
+    }
+
+    await _load();
+
+    if (!mounted || _account(GamingPlatformProvider.steam) == null) {
+      return;
+    }
+
+    setState(() => _busy = true);
+    _message('Steam lié. Import de la bibliothèque en cours…');
+
+    try {
+      final SteamFullSyncResult result = await SteamSyncService.syncEverything(
+        force: true,
+        staleAfter: Duration.zero,
+      );
+
+      if (!mounted) {
+        return;
+      }
+
+      final int issues = result.achievements.issues.length;
+      _message(
+        issues == 0
+            ? 'Steam synchronisé : ${result.library.detected} jeux importés.'
+            : 'Steam synchronisé : ${result.library.detected} jeux importés. '
+                'Certains succès seront revérifiés plus tard.',
+      );
+    } on SteamSyncException catch (error) {
+      if (mounted) {
+        _message(
+          'Steam est bien lié, mais la première synchronisation n’a pas pu '
+          'se terminer : ${error.message}',
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _busy = false);
+      }
+    }
+  }
+
+  void _finishOnboarding() {
+    if (_busy || !mounted) {
+      return;
+    }
+
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(
+        builder: (context) => const HallScreen(),
+      ),
+      (route) => false,
+    );
   }
 
   Future<void> _load() async {
@@ -180,8 +252,6 @@ class _GamingAccountsScreenState extends State<GamingAccountsScreen> {
         npsso: credentials.npsso,
       );
 
-      await _load();
-
       if (!mounted) {
         return;
       }
@@ -300,14 +370,11 @@ class _GamingAccountsScreenState extends State<GamingAccountsScreen> {
   }
 
   Future<_PlayStationCredentials?> _askPlayStationCredentials() async {
-    final TextEditingController onlineIdController =
-        TextEditingController();
-    final TextEditingController npssoController =
-        TextEditingController();
+    String onlineIdValue = '';
+    String npssoValue = '';
     bool hideNpsso = true;
 
-    final _PlayStationCredentials? result =
-        await showDialog<_PlayStationCredentials>(
+    return showDialog<_PlayStationCredentials>(
       context: context,
       barrierDismissible: false,
       builder: (dialogContext) {
@@ -381,8 +448,10 @@ class _GamingAccountsScreenState extends State<GamingAccountsScreen> {
                     ),
                     const SizedBox(height: 14),
                     TextField(
-                      controller: onlineIdController,
                       autocorrect: false,
+                      onChanged: (value) {
+                        onlineIdValue = value;
+                      },
                       textCapitalization: TextCapitalization.none,
                       style: const TextStyle(color: Colors.white),
                       decoration: const InputDecoration(
@@ -393,9 +462,11 @@ class _GamingAccountsScreenState extends State<GamingAccountsScreen> {
                     ),
                     const SizedBox(height: 12),
                     TextField(
-                      controller: npssoController,
                       autocorrect: false,
                       enableSuggestions: false,
+                      onChanged: (value) {
+                        npssoValue = value;
+                      },
                       obscureText: hideNpsso,
                       style: const TextStyle(color: Colors.white),
                       decoration: InputDecoration(
@@ -445,10 +516,9 @@ class _GamingAccountsScreenState extends State<GamingAccountsScreen> {
                 ),
                 FilledButton(
                   onPressed: () {
-                    final String onlineId =
-                        onlineIdController.text.trim();
+                    final String onlineId = onlineIdValue.trim();
                     final String npsso = _normalizeNpssoInput(
-                      npssoController.text,
+                      npssoValue,
                     );
 
                     if (onlineId.length < 3 || npsso.length < 32) {
@@ -481,11 +551,6 @@ class _GamingAccountsScreenState extends State<GamingAccountsScreen> {
         );
       },
     );
-
-    onlineIdController.dispose();
-    npssoController.dispose();
-
-    return result;
   }
 
   String _playStationSyncMessage(PlayStationSyncResult result) {
@@ -555,20 +620,28 @@ class _GamingAccountsScreenState extends State<GamingAccountsScreen> {
     return Scaffold(
       backgroundColor: const Color(0xff0d0f11),
       appBar: AppBar(
+        automaticallyImplyLeading: !widget.onboarding,
         backgroundColor: const Color(0xff15181b),
         foregroundColor: Colors.white,
-        title: const Text('COMPTES DE JEU'),
+        title: Text(
+          widget.onboarding ? 'CONNECTE TES PLATEFORMES' : 'COMPTES DE JEU',
+        ),
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : ListView(
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 30),
               children: [
-                const Text(
-                  'Lie une plateforme une seule fois. Project XP peut ensuite '
-                  'actualiser ta bibliothèque et tes accomplissements automatiquement, '
-                  'quand la plateforme le permet.',
-                  style: TextStyle(
+                Text(
+                  widget.onboarding
+                      ? 'Connecte maintenant les plateformes que tu utilises. '
+                          'Dès qu’une liaison est validée, Project XP importe ta '
+                          'bibliothèque et tes accomplissements quand la plateforme '
+                          'le permet. Tu peux aussi passer cette étape.'
+                      : 'Lie une plateforme une seule fois. Project XP peut ensuite '
+                          'actualiser ta bibliothèque et tes accomplissements automatiquement, '
+                          'quand la plateforme le permet.',
+                  style: const TextStyle(
                     color: Colors.white60,
                     height: 1.35,
                   ),
@@ -594,21 +667,66 @@ class _GamingAccountsScreenState extends State<GamingAccountsScreen> {
                   onUnlink: _unlinkPlayStation,
                   onSync: _syncPlayStation,
                 ),
-                const SizedBox(height: 10),
-                const _PlatformAccountCard(
-                  provider: GamingPlatformProvider.xbox,
-                  available: false,
-                ),
-                const SizedBox(height: 10),
-                const _PlatformAccountCard(
-                  provider: GamingPlatformProvider.nintendo,
-                  available: false,
-                ),
-                const SizedBox(height: 10),
-                const _PlatformAccountCard(
-                  provider: GamingPlatformProvider.epic,
-                  available: false,
-                ),
+                if (!widget.onboarding) ...[
+                  const SizedBox(height: 10),
+                  const _PlatformAccountCard(
+                    provider: GamingPlatformProvider.xbox,
+                    available: false,
+                  ),
+                  const SizedBox(height: 10),
+                  const _PlatformAccountCard(
+                    provider: GamingPlatformProvider.nintendo,
+                    available: false,
+                  ),
+                  const SizedBox(height: 10),
+                  const _PlatformAccountCard(
+                    provider: GamingPlatformProvider.epic,
+                    available: false,
+                  ),
+                ],
+                if (widget.onboarding) ...[
+                  const SizedBox(height: 22),
+                  const Divider(color: Colors.white12),
+                  const SizedBox(height: 14),
+                  Text(
+                    steam != null || playStation != null
+                        ? 'Tes plateformes liées seront synchronisées automatiquement. '
+                            'Tu pourras en ajouter d’autres plus tard depuis COMPTES.'
+                        : 'Tu pourras connecter tes plateformes plus tard depuis COMPTES.',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      color: Colors.white38,
+                      fontSize: 11.5,
+                      height: 1.35,
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 52,
+                    child: FilledButton.icon(
+                      onPressed: _busy ? null : _finishOnboarding,
+                      style: FilledButton.styleFrom(
+                        backgroundColor: const Color(0xffffc857),
+                        foregroundColor: const Color(0xff21150e),
+                      ),
+                      icon: Icon(
+                        steam != null || playStation != null
+                            ? Icons.arrow_forward_rounded
+                            : Icons.schedule_rounded,
+                      ),
+                      label: Text(
+                        steam != null || playStation != null
+                            ? 'CONTINUER VERS PROJECT XP'
+                            : 'PLUS TARD',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 0.6,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ],
             ),
     );

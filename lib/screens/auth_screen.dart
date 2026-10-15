@@ -1133,6 +1133,118 @@ class _AuthScreenState extends State<AuthScreen> {
     }
   }
 
+  Future<void> _openAlternativeLoginMethods() async {
+    if (_busy || !_biometricLoginAvailable || !mounted) {
+      return;
+    }
+
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: const Color(0xff21150e),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (sheetContext) {
+        return SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 14, 20, 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 46,
+                  height: 5,
+                  decoration: BoxDecoration(
+                    color: Colors.white24,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                const Row(
+                  children: [
+                    Icon(
+                      Icons.key_outlined,
+                      color: Color(0xffffc857),
+                    ),
+                    SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'AUTRE MÉTHODE DE CONNEXION',
+                        style: TextStyle(
+                          color: Color(0xffffc857),
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 0.8,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: () {
+                      Navigator.pop(sheetContext);
+                      unawaited(Future<void>.microtask(_loginWithBiometrics));
+                    },
+                    icon: const Icon(Icons.fingerprint),
+                    label: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'BIOMÉTRIE',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            _biometricUsername.isNotEmpty
+                                ? 'Empreinte ou visage • $_biometricUsername'
+                                : 'Empreinte ou reconnaissance faciale',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.white54,
+                              fontSize: 11,
+                              fontWeight: FontWeight.normal,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: const Color(0xffffc857),
+                      side: const BorderSide(color: Color(0xffffc857)),
+                      alignment: Alignment.centerLeft,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                TextButton(
+                  onPressed: () {
+                    Navigator.pop(sheetContext);
+                    unawaited(Future<void>.microtask(_disableBiometrics));
+                  },
+                  child: const Text(
+                    'Désactiver la connexion biométrique',
+                    style: TextStyle(
+                      color: Colors.white38,
+                      fontSize: 11,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   Future<void> _loginWithBiometrics() async {
     if (_busy) {
       return;
@@ -1491,35 +1603,18 @@ class _AuthScreenState extends State<AuthScreen> {
                     ),
                   ],
                   if (!_registerMode && _biometricLoginAvailable) ...[
-                    const SizedBox(height: 16),
-                    SizedBox(
-                      width: double.infinity,
-                      height: 50,
-                      child: OutlinedButton.icon(
-                        onPressed: _busy ? null : _loginWithBiometrics,
-                        icon: const Icon(Icons.fingerprint),
-                        label: Text(
-                          _biometricUsername.isNotEmpty
-                              ? 'SE CONNECTER EN TANT QUE $_biometricUsername'
-                              : 'CONNEXION BIOMÉTRIQUE',
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: const Color(0xffffc857),
-                          side: const BorderSide(
-                            color: Color(0xffffc857),
-                          ),
+                    const SizedBox(height: 14),
+                    TextButton.icon(
+                      onPressed: _busy ? null : _openAlternativeLoginMethods,
+                      icon: const Icon(Icons.key_outlined, size: 19),
+                      label: const Text(
+                        'AUTRE MÉTHODE DE CONNEXION',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w800,
                         ),
                       ),
-                    ),
-                    TextButton(
-                      onPressed: _busy ? null : _disableBiometrics,
-                      child: const Text(
-                        'Désactiver la connexion biométrique',
-                        style: TextStyle(
-                          color: Colors.white38,
-                          fontSize: 11,
-                        ),
+                      style: TextButton.styleFrom(
+                        foregroundColor: const Color(0xffffc857),
                       ),
                     ),
                   ],

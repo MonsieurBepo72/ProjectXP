@@ -175,7 +175,7 @@ class SteamSyncService {
       'project_xp_steam_sync_issue_retries_';
   static const int maxIssueRetryAttempts = 3;
   static const Duration _achievementRequestTimeout = Duration(seconds: 25);
-  static const int _achievementSyncConcurrency = 3;
+  static const int _achievementSyncConcurrency = 2;
 
   static Future<String?> _currentUserId() {
     return AuthService.getCurrentUserId();
@@ -1382,11 +1382,11 @@ class SteamSyncService {
     int completed = 0;
 
     Future<void> worker(int workerIndex) async {
-      // Décalage très léger au démarrage : on gagne le parallélisme sans
-      // envoyer trois appels exactement à la même milliseconde vers Steam.
+      // Décalage léger au démarrage : deux workers suffisent pour garder une
+      // synchro fluide sans envoyer trop d'appels simultanés vers Steam.
       if (workerIndex > 0) {
         await Future<void>.delayed(
-          Duration(milliseconds: 120 * workerIndex),
+          Duration(milliseconds: 220 * workerIndex),
         );
       }
 
@@ -1471,7 +1471,7 @@ class SteamSyncService {
         // Respiration courte entre deux jeux d'un même worker. Le débit reste
         // volontairement borné même si la bibliothèque contient 100+ jeux.
         if (nextQueueIndex < queue.length) {
-          await Future<void>.delayed(const Duration(milliseconds: 90));
+          await Future<void>.delayed(const Duration(milliseconds: 180));
         }
       }
     }

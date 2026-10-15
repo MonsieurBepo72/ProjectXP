@@ -17,6 +17,9 @@ verify_jwt = true
 [functions.playstation-sync]
 verify_jwt = true
 
+[functions.delete-account]
+verify_jwt = true
+
 # Cette fonction reçoit le callback OpenID Steam depuis le navigateur.
 # Le démarrage du flux vérifie déjà le Bearer token dans le code et le callback
 # est validé côté serveur contre Steam + le flow temporaire stocké en base.

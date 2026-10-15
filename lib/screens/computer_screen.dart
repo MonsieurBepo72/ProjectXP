@@ -8,6 +8,7 @@ import 'package:project_xp/screens/cloud_identity_screen.dart';
 import 'package:project_xp/screens/profile_screen.dart';
 import 'package:project_xp/screens/splash_screen.dart';
 import 'package:project_xp/services/app_notification_service.dart';
+import 'package:project_xp/services/account_deletion_service.dart';
 import 'package:project_xp/services/auth_service.dart';
 import 'package:project_xp/services/avatar_storage.dart';
 import 'package:project_xp/services/biometric_auth_service.dart';
@@ -40,6 +41,7 @@ class _ComputerScreenState extends State<ComputerScreen> {
 
   bool _biometricAvailable = false;
   bool _biometricEnabled = false;
+  bool _deletingAccount = false;
 
   CloudIdentityStatus? _cloudIdentityStatus;
 
@@ -201,8 +203,9 @@ class _ComputerScreenState extends State<ComputerScreen> {
             ),
           ),
           content: const Text(
-            'Tu veux vraiment te déconnecter de Project XP ?',
-            style: TextStyle(color: Colors.white70),
+            'Tu veux te déconnecter de Project XP ?\n\n'
+            'Tu pourras te reconnecter avec ton mot de passe ou avec la biométrie si elle est activée sur cet appareil.',
+            style: TextStyle(color: Colors.white70, height: 1.4),
           ),
           actions: [
             TextButton(
@@ -221,6 +224,70 @@ class _ComputerScreenState extends State<ComputerScreen> {
               child: const Text(
                 'SE DÉCONNECTER',
                 style: TextStyle(
+                  color: Color(0xffffc857),
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed != true) {
+      return;
+    }
+
+    // Déconnexion quotidienne : on ferme uniquement l'accès local.
+    // La session Cloud reste alignée avec CE compte afin que la biométrie
+    // puisse le rouvrir sans mot de passe sur cet appareil.
+    await SessionService.lock();
+
+    if (!mounted) {
+      return;
+    }
+
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute<void>(builder: (context) => const SplashScreen()),
+      (route) => false,
+    );
+  }
+
+  Future<void> _changeAccount() async {
+    final bool? confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          backgroundColor: const Color(0xff21150e),
+          title: const Text(
+            'Changer de compte',
+            style: TextStyle(
+              color: Color(0xffffc857),
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          content: const Text(
+            'Project XP va fermer complètement la session actuelle sur cet appareil.\n\n'
+            'La reconnexion rapide par biométrie de ce compte sera désactivée afin qu’un autre compte puisse être utilisé en toute sécurité.',
+            style: TextStyle(color: Colors.white70, height: 1.4),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.pop(dialogContext, false);
+              },
+              child: const Text(
+                'ANNULER',
+                style: TextStyle(color: Colors.white54),
+              ),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.pop(dialogContext, true);
+              },
+              child: const Text(
+                'CHANGER DE COMPTE',
+                style: TextStyle(
                   color: Colors.redAccent,
                   fontWeight: FontWeight.bold,
                 ),
@@ -235,7 +302,8 @@ class _ComputerScreenState extends State<ComputerScreen> {
       return;
     }
 
-    await SessionService.lock();
+    await BiometricAuthService.disableForCurrentAccount();
+    await SessionService.logout();
 
     if (!mounted) {
       return;
@@ -243,6 +311,245 @@ class _ComputerScreenState extends State<ComputerScreen> {
 
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute<void>(builder: (context) => const SplashScreen()),
+      (route) => false,
+    );
+  }
+
+  Future<void> _deleteAccount() async {
+    if (_deletingAccount) {
+      return;
+    }
+
+    final bool? understands = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          backgroundColor: const Color(0xff21150e),
+          title: const Row(
+            children: [
+              Icon(
+                Icons.warning_amber_rounded,
+                color: Colors.redAccent,
+              ),
+              SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'SUPPRIMER LE COMPTE ?',
+                  style: TextStyle(
+                    color: Colors.redAccent,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          content: const SingleChildScrollView(
+            child: Text(
+              'Cette action supprimera définitivement ton compte Project XP '
+              'et les données qui lui sont liées :\n\n'
+              '• profil, avatar, bibliothèque et activité Cloud ;\n'
+              '• messages, relations sociales et données de Compagnie ;\n'
+              '• liaisons Steam / PlayStation et jetons conservés par Project XP ;\n'
+              '• données locales de ce compte sur cet appareil.\n\n'
+              'Tes vrais comptes Steam et PlayStation ne seront jamais supprimés.\n\n'
+              'Cette action est irréversible.',
+              style: TextStyle(
+                color: Colors.white70,
+                height: 1.45,
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.pop(dialogContext, false);
+              },
+              child: const Text(
+                'ANNULER',
+                style: TextStyle(color: Colors.white54),
+              ),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.pop(dialogContext, true);
+              },
+              child: const Text(
+                'CONTINUER',
+                style: TextStyle(
+                  color: Colors.redAccent,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (understands != true || !mounted) {
+      return;
+    }
+
+    final String? currentPassword = await _askCurrentPassword(
+      title: 'CONFIRMER TON IDENTITÉ',
+      message:
+          'Entre ton mot de passe Project XP avant d’autoriser la suppression définitive du compte.',
+    );
+
+    if (currentPassword == null || !mounted) {
+      return;
+    }
+
+    final bool passwordValid = await AuthService.verifyCurrentPassword(
+      currentPassword,
+    );
+
+    if (!mounted) {
+      return;
+    }
+
+    if (!passwordValid) {
+      _showMessage('Mot de passe incorrect. Le compte n’a pas été supprimé.');
+      return;
+    }
+
+    final bool? finalConfirmation = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        return AlertDialog(
+          backgroundColor: const Color(0xff21150e),
+          title: const Text(
+            'DERNIÈRE CONFIRMATION',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: Colors.redAccent,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          content: const Text(
+            'Après cette confirmation, Project XP supprimera le compte et ses '
+            'données. Il ne sera plus possible de les récupérer.\n\n'
+            'Veux-tu vraiment continuer ?',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: Colors.white70,
+              height: 1.45,
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.pop(dialogContext, false);
+              },
+              child: const Text(
+                'ANNULER',
+                style: TextStyle(color: Colors.white54),
+              ),
+            ),
+            FilledButton.icon(
+              onPressed: () {
+                Navigator.pop(dialogContext, true);
+              },
+              style: FilledButton.styleFrom(
+                backgroundColor: Colors.redAccent,
+                foregroundColor: Colors.white,
+              ),
+              icon: const Icon(Icons.delete_forever_rounded),
+              label: const Text(
+                'SUPPRIMER DÉFINITIVEMENT',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (finalConfirmation != true || !mounted) {
+      return;
+    }
+
+    setState(() {
+      _deletingAccount = true;
+    });
+
+    BuildContext? progressDialogContext;
+
+    unawaited(
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) {
+          progressDialogContext = dialogContext;
+
+          return const PopScope(
+            canPop: false,
+            child: AlertDialog(
+              backgroundColor: Color(0xff21150e),
+              content: Row(
+                children: [
+                  SizedBox(
+                    width: 24,
+                    height: 24,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 3,
+                      color: Colors.redAccent,
+                    ),
+                  ),
+                  SizedBox(width: 16),
+                  Expanded(
+                    child: Text(
+                      'Suppression définitive en cours…',
+                      style: TextStyle(
+                        color: Colors.white70,
+                        height: 1.35,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+
+    // Laisse au Navigator le temps d'afficher la boîte de progression afin de
+    // pouvoir la fermer de façon ciblée quand le serveur répond.
+    for (int attempt = 0;
+        attempt < 10 && progressDialogContext == null;
+        attempt += 1) {
+      await Future<void>.delayed(const Duration(milliseconds: 16));
+    }
+
+    final AccountDeletionResult result =
+        await AccountDeletionService.deleteCurrentAccount(
+      currentPassword: currentPassword,
+    );
+
+    if (!mounted) {
+      return;
+    }
+
+    final BuildContext? progressContext = progressDialogContext;
+    if (progressContext != null && progressContext.mounted) {
+      Navigator.of(progressContext).pop();
+    }
+
+    setState(() {
+      _deletingAccount = false;
+    });
+
+    if (!result.success) {
+      _showMessage(result.message);
+      return;
+    }
+
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute<void>(
+        builder: (context) => const SplashScreen(),
+      ),
       (route) => false,
     );
   }
@@ -655,12 +962,96 @@ class _ComputerScreenState extends State<ComputerScreen> {
                           ),
                         ),
                         style: OutlinedButton.styleFrom(
-                          foregroundColor: Colors.redAccent,
-                          side: const BorderSide(color: Colors.redAccent),
+                          foregroundColor: const Color(0xffffc857),
+                          side: const BorderSide(color: Color(0xffffc857)),
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(14),
                           ),
                         ),
+                      ),
+                    ),
+
+                    const SizedBox(height: 10),
+
+                    SizedBox(
+                      width: double.infinity,
+                      height: 48,
+                      child: TextButton.icon(
+                        onPressed: () {
+                          Navigator.pop(sheetContext);
+
+                          _changeAccount();
+                        },
+                        icon: const Icon(Icons.switch_account_outlined),
+                        label: const Text(
+                          'CHANGER DE COMPTE',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 0.8,
+                          ),
+                        ),
+                        style: TextButton.styleFrom(
+                          foregroundColor: Colors.redAccent,
+                        ),
+                      ),
+                    ),
+
+                    const SizedBox(height: 18),
+
+                    const Divider(
+                      color: Colors.white12,
+                      height: 1,
+                    ),
+
+                    const SizedBox(height: 18),
+
+                    const _SecuritySectionLabel(
+                      label: 'ZONE DANGEREUSE',
+                    ),
+
+                    const SizedBox(height: 10),
+
+                    SizedBox(
+                      width: double.infinity,
+                      height: 52,
+                      child: OutlinedButton.icon(
+                        onPressed: _deletingAccount
+                            ? null
+                            : () {
+                                Navigator.pop(sheetContext);
+
+                                _deleteAccount();
+                              },
+                        icon: const Icon(Icons.delete_forever_rounded),
+                        label: const Text(
+                          'SUPPRIMER MON COMPTE',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 0.8,
+                          ),
+                        ),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.redAccent,
+                          side: const BorderSide(
+                            color: Colors.redAccent,
+                          ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                        ),
+                      ),
+                    ),
+
+                    const SizedBox(height: 8),
+
+                    const Text(
+                      'Supprime définitivement le compte Project XP et ses '
+                      'données. Tes comptes Steam et PlayStation restent intacts.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: Colors.white38,
+                        fontSize: 10.5,
+                        height: 1.35,
                       ),
                     ),
                   ],
@@ -1338,7 +1729,7 @@ class _ComputerScreenState extends State<ComputerScreen> {
                 _SettingsHubTile(
                   icon: Icons.manage_accounts,
                   title: 'COMPTE & SÉCURITÉ',
-                  subtitle: 'E-mail, mot de passe, biométrie et déconnexion',
+                  subtitle: 'E-mail, mot de passe, biométrie et sessions',
                   onTap: () {
                     openAfterClose(_openAccount);
                   },
@@ -2749,11 +3140,6 @@ class _PortalLibraryPageState extends State<_PortalLibraryPage> {
             ],
               ],
             ),
-          ),
-          const Positioned(
-            right: 18,
-            bottom: 18,
-            child: SteamLibraryIssuesFloatingButton(),
           ),
         ],
       ),

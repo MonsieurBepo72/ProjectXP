@@ -3,10 +3,10 @@ import 'package:flutter/material.dart';
 import '../../models/avatar_model.dart';
 import '../../services/avatar_storage.dart';
 import '../../widgets/avatar_renderer.dart';
+import '../gaming_accounts_screen.dart';
 import '../hall_screen.dart';
 
-class AvatarPreviewScreen
-    extends StatefulWidget {
+class AvatarPreviewScreen extends StatefulWidget {
   final AvatarModel avatar;
 
   // true = sauvegarde réellement l'avatar
@@ -20,12 +20,10 @@ class AvatarPreviewScreen
   });
 
   @override
-  State<AvatarPreviewScreen> createState() =>
-      _AvatarPreviewScreenState();
+  State<AvatarPreviewScreen> createState() => _AvatarPreviewScreenState();
 }
 
-class _AvatarPreviewScreenState
-    extends State<AvatarPreviewScreen> {
+class _AvatarPreviewScreenState extends State<AvatarPreviewScreen> {
   bool _saving = false;
 
   Future<void> _validateAvatar() async {
@@ -39,9 +37,7 @@ class _AvatarPreviewScreenState
 
     try {
       if (widget.saveOnValidate) {
-        await AvatarStorage.saveAvatar(
-          widget.avatar,
-        );
+        await AvatarStorage.saveAvatar(widget.avatar);
       }
 
       if (!mounted) {
@@ -50,8 +46,9 @@ class _AvatarPreviewScreenState
 
       Navigator.of(context).pushAndRemoveUntil(
         MaterialPageRoute(
-          builder: (context) =>
-              const HallScreen(),
+          builder: (context) => widget.saveOnValidate
+              ? const GamingAccountsScreen(onboarding: true)
+              : const HallScreen(),
         ),
         (route) => false,
       );
@@ -64,8 +61,7 @@ class _AvatarPreviewScreenState
         _saving = false;
       });
 
-      ScaffoldMessenger.of(context)
-          .showSnackBar(
+      ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
             'Impossible de sauvegarder l’avatar : $error',
@@ -76,25 +72,17 @@ class _AvatarPreviewScreenState
   }
 
   @override
-  Widget build(
-    BuildContext context,
-  ) {
-    final bool isTest =
-        !widget.saveOnValidate;
+  Widget build(BuildContext context) {
+    final bool isTest = !widget.saveOnValidate;
 
     return Scaffold(
-      backgroundColor:
-          const Color(0xff160e09),
+      backgroundColor: const Color(0xff160e09),
       appBar: AppBar(
-        backgroundColor:
-            Colors.transparent,
-        foregroundColor:
-            const Color(0xffffc857),
+        backgroundColor: Colors.transparent,
+        foregroundColor: const Color(0xffffc857),
         elevation: 0,
         title: Text(
-          isTest
-              ? 'Aperçu du test'
-              : 'Ton aventurier',
+          isTest ? 'Aperçu du test' : 'Ton aventurier',
         ),
       ),
       body: SafeArea(
@@ -104,8 +92,7 @@ class _AvatarPreviewScreenState
             BuildContext context,
             BoxConstraints constraints,
           ) {
-            final bool compact =
-                constraints.maxHeight < 650;
+            final bool compact = constraints.maxHeight < 650;
 
             return Padding(
               padding: EdgeInsets.fromLTRB(
@@ -117,127 +104,78 @@ class _AvatarPreviewScreenState
               child: Column(
                 children: [
                   Text(
-                    isTest
-                        ? 'MODE DEV'
-                        : 'VOICI TON AVENTURIER',
-                    textAlign:
-                        TextAlign.center,
+                    isTest ? 'MODE DEV' : 'VOICI TON AVENTURIER',
+                    textAlign: TextAlign.center,
                     style: TextStyle(
-                      color: const Color(
-                        0xffffc857,
-                      ),
-                      fontSize:
-                          compact ? 21 : 24,
-                      fontWeight:
-                          FontWeight.bold,
+                      color: const Color(0xffffc857),
+                      fontSize: compact ? 21 : 24,
+                      fontWeight: FontWeight.bold,
                       letterSpacing: 1,
                     ),
                   ),
-
-                  SizedBox(
-                    height: compact ? 5 : 8,
-                  ),
-
+                  SizedBox(height: compact ? 5 : 8),
                   Text(
                     isTest
                         ? 'Pour le moment, ta photo est utilisée comme résultat de test. '
                             'Ton avatar actuel ne sera pas remplacé.'
                         : 'Tu pourras modifier ton avatar plus tard depuis ton profil.',
-                    textAlign:
-                        TextAlign.center,
+                    textAlign: TextAlign.center,
                     style: TextStyle(
                       color: Colors.white60,
-                      fontSize:
-                          compact ? 13 : 14,
+                      fontSize: compact ? 13 : 14,
                       height: 1.35,
                     ),
                   ),
-
-                  SizedBox(
-                    height: compact ? 8 : 12,
-                  ),
-
+                  SizedBox(height: compact ? 8 : 12),
                   Expanded(
                     child: Center(
                       child: FittedBox(
                         fit: BoxFit.contain,
                         child: AvatarRenderer(
-                          avatar:
-                              widget.avatar,
+                          avatar: widget.avatar,
                           size: 285,
                         ),
                       ),
                     ),
                   ),
-
+                  SizedBox(height: compact ? 8 : 14),
                   SizedBox(
-                    height: compact ? 8 : 14,
-                  ),
-
-                  SizedBox(
-                    width:
-                        double.infinity,
-                    height:
-                        compact ? 50 : 54,
-                    child:
-                        OutlinedButton.icon(
+                    width: double.infinity,
+                    height: compact ? 50 : 54,
+                    child: OutlinedButton.icon(
                       onPressed: _saving
                           ? null
                           : () {
-                              Navigator.pop(
-                                context,
-                              );
+                              Navigator.pop(context);
                             },
-                      icon: const Icon(
-                        Icons.edit,
-                      ),
-                      label: const Text(
-                        'MODIFIER',
-                      ),
-                      style:
-                          OutlinedButton.styleFrom(
-                        foregroundColor:
-                            const Color(
-                          0xffffc857,
-                        ),
-                        side:
-                            const BorderSide(
-                          color: Color(
-                            0xffffc857,
-                          ),
+                      icon: const Icon(Icons.edit),
+                      label: const Text('MODIFIER'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: const Color(0xffffc857),
+                        side: const BorderSide(
+                          color: Color(0xffffc857),
                         ),
                       ),
                     ),
                   ),
-
+                  SizedBox(height: compact ? 8 : 12),
                   SizedBox(
-                    height: compact ? 8 : 12,
-                  ),
-
-                  SizedBox(
-                    width:
-                        double.infinity,
-                    height:
-                        compact ? 52 : 56,
-                    child:
-                        ElevatedButton.icon(
-                      onPressed: _saving
-                          ? null
-                          : _validateAvatar,
+                    width: double.infinity,
+                    height: compact ? 52 : 56,
+                    child: ElevatedButton.icon(
+                      onPressed: _saving ? null : _validateAvatar,
                       icon: _saving
                           ? const SizedBox(
                               width: 20,
                               height: 20,
-                              child:
-                                  CircularProgressIndicator(
+                              child: CircularProgressIndicator(
                                 strokeWidth: 3,
                               ),
                             )
                           : Icon(
                               isTest
                                   ? Icons.check
-                                  : Icons
-                                      .check_circle,
+                                  : Icons.check_circle,
                             ),
                       label: Text(
                         _saving
@@ -245,24 +183,14 @@ class _AvatarPreviewScreenState
                             : isTest
                                 ? 'TERMINER LE TEST'
                                 : 'VALIDER MON AVATAR',
-                        style:
-                            const TextStyle(
-                          fontWeight:
-                              FontWeight.bold,
-                          letterSpacing:
-                              0.8,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 0.8,
                         ),
                       ),
-                      style:
-                          ElevatedButton.styleFrom(
-                        backgroundColor:
-                            const Color(
-                          0xffffc857,
-                        ),
-                        foregroundColor:
-                            const Color(
-                          0xff21150e,
-                        ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xffffc857),
+                        foregroundColor: const Color(0xff21150e),
                       ),
                     ),
                   ),

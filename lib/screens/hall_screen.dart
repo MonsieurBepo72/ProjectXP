@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -11,6 +12,7 @@ import '../services/friend_service.dart';
 import '../services/notification_center_service.dart';
 import '../services/private_message_service.dart';
 import '../services/online_presence_service.dart';
+import '../services/phone_wallpaper_service.dart';
 import '../services/project_xp_communicator_ui_service.dart';
 import 'computer_screen.dart';
 import 'phone_home_screen.dart';
@@ -125,6 +127,10 @@ class _HallScreenState extends State<HallScreen>
   int _unreadPrivateMessageCount = 0;
   int _incomingFriendRequestCount = 0;
 
+  // Fond d'écran réellement choisi dans le Communicateur XP.
+  // Le chemin est propre au compte courant via PhoneWallpaperService.
+  String? _phoneWallpaperPath;
+
   StreamSubscription<int>?
       _privateMessageUnreadSubscription;
 
@@ -211,6 +217,9 @@ class _HallScreenState extends State<HallScreen>
     WidgetsBinding.instance.addPostFrameCallback(
       (_) {
         _refreshCompagniePhone();
+        unawaited(
+          _refreshHallPhoneWallpaper(),
+        );
         _startPhoneRealtimeCounters();
       },
     );
@@ -281,6 +290,10 @@ class _HallScreenState extends State<HallScreen>
 
     ProjectXpCommunicatorUiService
         .markNavigationReady();
+
+    unawaited(
+      _refreshHallPhoneWallpaper(),
+    );
   }
 
   @override
@@ -329,6 +342,10 @@ class _HallScreenState extends State<HallScreen>
 
     unawaited(
       _refreshCompagniePhone(),
+    );
+
+    unawaited(
+      _refreshHallPhoneWallpaper(),
     );
   }
 
@@ -781,6 +798,75 @@ class _HallScreenState extends State<HallScreen>
                       child: Stack(
                         clipBehavior: Clip.none,
                         children: [
+                          // Premier essai : trop droit et trop grand.
+                          // Ici on incruste le fond dans une zone plus petite
+                          // et inclinée pour mieux coller au téléphone du décor.
+                          if (_phoneWallpaperPath != null)
+                            Positioned(
+                              left: 37,
+                              top: 27,
+                              width: 48,
+                              height: 121,
+                              child: IgnorePointer(
+                                child: Transform(
+                                  alignment: Alignment.center,
+                                  transform: Matrix4.identity()
+                                    ..setEntry(3, 2, 0.0015)
+                                    ..rotateZ(-0.15)
+                                    ..rotateX(0.22)
+                                    ..rotateY(-0.08),
+                                  child: ClipRRect(
+                                    borderRadius: BorderRadius.circular(
+                                      5,
+                                    ),
+                                    child: Stack(
+                                      fit: StackFit.expand,
+                                      children: [
+                                        Image.file(
+                                          File(
+                                            _phoneWallpaperPath!,
+                                          ),
+                                          fit: BoxFit.cover,
+                                          filterQuality: FilterQuality.high,
+                                          errorBuilder: (
+                                            BuildContext context,
+                                            Object error,
+                                            StackTrace? stackTrace,
+                                          ) {
+                                            return const SizedBox.shrink();
+                                          },
+                                        ),
+
+                                        // Reflet discret pour garder l'effet vitre.
+                                        DecoratedBox(
+                                          decoration: BoxDecoration(
+                                            gradient: LinearGradient(
+                                              begin: Alignment.topLeft,
+                                              end: Alignment.bottomRight,
+                                              colors: [
+                                                Colors.white.withValues(
+                                                  alpha: 0.08,
+                                                ),
+                                                Colors.transparent,
+                                                Colors.black.withValues(
+                                                  alpha: 0.16,
+                                                ),
+                                              ],
+                                              stops: const [
+                                                0,
+                                                0.40,
+                                                1,
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+
                           Positioned.fill(
                             child: _TouchZone(
                               debug: debugTouchZones,
@@ -1220,6 +1306,25 @@ class _HallScreenState extends State<HallScreen>
   }
 
   // ===========================================================================
+  // FOND D'ÉCRAN DU COMMUNICATEUR DANS LE HALL
+  // ===========================================================================
+
+  Future<void> _refreshHallPhoneWallpaper() async {
+    final String? path =
+        await PhoneWallpaperService
+            .loadCurrentWallpaperPath();
+
+    if (!mounted ||
+        path == _phoneWallpaperPath) {
+      return;
+    }
+
+    setState(() {
+      _phoneWallpaperPath = path;
+    });
+  }
+
+  // ===========================================================================
   // COMMUNICATEUR XP
   //
   // Le téléphone reste toujours accessible, même lorsque les notifications
@@ -1253,6 +1358,7 @@ class _HallScreenState extends State<HallScreen>
     }
 
     await _refreshCompagniePhone();
+    await _refreshHallPhoneWallpaper();
   }
 }
 

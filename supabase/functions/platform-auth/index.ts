@@ -492,10 +492,13 @@ async function linkPlayStation(request: Request, body: JsonRecord) {
       { limit: 1 },
     )
 
+    // L'identité PlayStation liée doit provenir exclusivement de la session
+    // authentifiée par le NPSSO. Le pseudo envoyé par le client n'est jamais
+    // utilisé comme source de vérité pour provider_user_id.
     const profileResponse =
       await getProfileFromUserName(
         { accessToken },
-        onlineId,
+        'me',
       ) as unknown as JsonRecord
 
     const profileRaw = profileResponse.profile
@@ -504,9 +507,9 @@ async function linkPlayStation(request: Request, body: JsonRecord) {
         {
           ok: false,
           error:
-            'PlayStation n’a pas pu retrouver ce profil. Vérifie ton identifiant PSN.',
+            'PlayStation n’a pas pu lire le profil du compte authentifié.',
         },
-        404,
+        502,
       )
     }
 
@@ -532,7 +535,7 @@ async function linkPlayStation(request: Request, body: JsonRecord) {
         {
           ok: false,
           error:
-            'Le profil PlayStation retourné ne correspond pas à l’identifiant saisi.',
+            'Le jeton NPSSO ne correspond pas à l’identifiant PlayStation saisi.',
         },
         409,
       )

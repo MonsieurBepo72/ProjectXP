@@ -730,13 +730,18 @@ class GameLibraryService {
         recentAt = playedAt;
       }
 
+      final bool mergedOfficialCompletion =
+          merged.statusAutomatic && merged.status == GameStatus.completed;
       final bool mayAutoClassify =
           existing.statusAutomatic ||
-          existing.status == GameStatus.unclassified;
+          existing.status == GameStatus.unclassified ||
+          mergedOfficialCompletion;
 
       entries[index] = merged.copyWith(
-        status: mayAutoClassify ? incoming.status : existing.status,
-        statusAutomatic: mayAutoClassify ? true : existing.statusAutomatic,
+        status: mayAutoClassify ? merged.status : existing.status,
+        statusAutomatic: mayAutoClassify
+            ? merged.statusAutomatic
+            : existing.statusAutomatic,
         favorite: existing.favorite,
         progressPercent: existing.progressPercent,
         personalUpdatedAt: existing.personalUpdatedAt,
@@ -858,46 +863,30 @@ class GameLibraryService {
     GameStatus mergedStatus = personal.status;
     bool mergedStatusAutomatic = personal.statusAutomatic;
 
-    GamePlatformProfile? mergedSteam;
-    for (final GamePlatformProfile profile in mergedProfiles) {
-      if (profile.platform == GamePlatform.steam) {
-        mergedSteam = profile;
-        break;
-      }
-    }
+    final ({
+      bool hasReliableProfile,
+      bool completed,
+      bool started,
+    }) signals = _automaticStatusSignals(mergedProfiles);
 
-    if (mergedSteam != null) {
-      final GameAchievementSummary steamSummary =
-          mergedSteam.computedAchievementSummary;
-      final int platformUnlocked = mergedSteam.achievementDetails.isNotEmpty
-          ? mergedSteam.achievementDetails
-                .where((achievement) => achievement.platformUnlocked)
-                .length
-          : steamSummary.unlocked;
-      final int achievementTotal = mergedSteam.achievementDetails.isNotEmpty
-          ? mergedSteam.achievementDetails.length
-          : steamSummary.total;
-      final bool hasKnownAchievementProgress = achievementTotal > 0;
-      final bool hasStarted =
-          mergedSteam.playtimeMinutes > 0 || platformUnlocked > 0;
+    // Une complétion automatique déjà confirmée sur l'une des deux copies ne
+    // doit jamais être perdue pendant un simple merge local / Cloud. Une vraie
+    // synchronisation de plateforme peut toujours recalculer ensuite sa propre
+    // progression avec des données plus fraîches.
+    final bool hadAutomaticCompletion =
+        (a.statusAutomatic && a.status == GameStatus.completed) ||
+        (b.statusAutomatic && b.status == GameStatus.completed);
 
-      final bool preserveManualOutcome =
-          !hasKnownAchievementProgress &&
-          !personal.statusAutomatic &&
-          (personal.status == GameStatus.completed ||
-              personal.status == GameStatus.abandoned);
-
-      if (!preserveManualOutcome) {
-        if (hasKnownAchievementProgress &&
-            platformUnlocked >= achievementTotal) {
-          mergedStatus = GameStatus.completed;
-        } else if (hasStarted) {
-          mergedStatus = GameStatus.inProgress;
-        } else {
-          mergedStatus = GameStatus.backlog;
-        }
-        mergedStatusAutomatic = true;
-      }
+    if (hadAutomaticCompletion || signals.completed) {
+      mergedStatus = GameStatus.completed;
+      mergedStatusAutomatic = true;
+    } else if ((personal.statusAutomatic ||
+            personal.status == GameStatus.unclassified) &&
+        signals.hasReliableProfile) {
+      mergedStatus = signals.started
+          ? GameStatus.inProgress
+          : GameStatus.backlog;
+      mergedStatusAutomatic = true;
     }
 
     return preferred.copyWith(
@@ -919,6 +908,71 @@ class GameLibraryService {
       updatedAt: preferred.updatedAt.isAfter(other.updatedAt)
           ? preferred.updatedAt
           : other.updatedAt,
+    );
+  }
+
+  static ({
+    bool hasReliableProfile,
+    bool completed,
+    bool started,
+  }) _automaticStatusSignals(List<GamePlatformProfile> profiles) {
+    bool hasReliableProfile = false;
+    bool completed = false;
+    bool started = false;
+
+    for (final GamePlatformProfile profile in profiles) {
+      final bool reliable =
+          profile.source != GameSource.manual ||
+          (profile.externalId?.trim().isNotEmpty ?? false) ||
+          profile.achievementsLastSyncedAt != null;
+      if (!reliable) {
+        continue;
+      }
+
+      hasReliableProfile = true;
+
+      final GameAchievementSummary summary = profile.achievements;
+      final bool summaryCountsAreOfficial =
+          profile.source != GameSource.manual ||
+          profile.achievementsLastSyncedAt != null;
+      final int platformUnlocked = profile.achievementDetails.isNotEmpty
+          ? profile.achievementDetails
+                .where((achievement) => achievement.platformUnlocked)
+                .length
+          : (summaryCountsAreOfficial ? summary.unlocked : 0);
+      final int achievementTotal = profile.achievementDetails.isNotEmpty
+          ? profile.achievementDetails.length
+          : (summaryCountsAreOfficial ? summary.total : 0);
+
+      final bool achievementCompletionKnown = achievementTotal > 0;
+      final bool achievementCompleted =
+          achievementCompletionKnown && platformUnlocked >= achievementTotal;
+
+      // PlayStation stocke actuellement son pourcentage officiel PSN dans
+      // scoreEarned / scoreTotal (= 100). Xbox pourra réutiliser naturellement
+      // la même logique de score lorsqu'il sera branché.
+      final bool scoreCompletionKnown =
+          (profile.platform == GamePlatform.playstation ||
+              profile.platform == GamePlatform.xbox) &&
+          summary.scoreTotal > 0;
+      final bool scoreCompleted =
+          scoreCompletionKnown && summary.scoreEarned >= summary.scoreTotal;
+
+      if (achievementCompleted || scoreCompleted) {
+        completed = true;
+      }
+
+      if (profile.playtimeMinutes > 0 ||
+          platformUnlocked > 0 ||
+          (scoreCompletionKnown && summary.scoreEarned > 0)) {
+        started = true;
+      }
+    }
+
+    return (
+      hasReliableProfile: hasReliableProfile,
+      completed: completed,
+      started: started,
     );
   }
 

@@ -74,3 +74,6 @@ project_xp_backup_before_*
 # Node / Supabase local tooling
 node_modules/
 supabase/.temp/
+
+# Compiled APK files
+*.apk

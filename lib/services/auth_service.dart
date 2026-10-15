@@ -493,6 +493,58 @@ class AuthService {
     );
   }
 
+
+  /// Supprime uniquement l'identité locale actuellement active du registre
+  /// multi-comptes. Les données métier associées sont nettoyées par
+  /// AccountDeletionService AVANT cet appel.
+  ///
+  /// [relatedUserIds] permet aussi de retirer un éventuel stub legacy portant
+  /// l'UUID social / Cloud du même joueur, sans toucher aux autres comptes
+  /// présents sur l'appareil.
+  static Future<bool> deleteCurrentLocalAccount({
+    Iterable<String> relatedUserIds = const <String>[],
+  }) async {
+    await initialize();
+
+    final SharedPreferences prefs =
+        await SharedPreferences.getInstance();
+
+    final String currentUserId =
+        prefs.getString(_userIdKey)?.trim() ?? '';
+
+    if (currentUserId.isEmpty) {
+      return false;
+    }
+
+    final Set<String> idsToDelete = <String>{
+      currentUserId,
+      ...relatedUserIds.map((value) => value.trim()).where(
+            (value) => value.isNotEmpty,
+          ),
+    };
+
+    final List<Map<String, dynamic>> accounts =
+        _readAccountsFromPrefs(prefs);
+
+    accounts.removeWhere(
+      (account) => idsToDelete.contains(
+        account['id']?.toString().trim() ?? '',
+      ),
+    );
+
+    await _saveAccountsToPrefs(
+      prefs,
+      accounts,
+    );
+
+    await prefs.remove(_isLoggedInKey);
+    await prefs.remove(_userIdKey);
+    await prefs.remove(_usernameKey);
+    await prefs.remove(_emailKey);
+
+    return true;
+  }
+
   // ===========================================================================
   // SÉCURITÉ DU MOT DE PASSE
   // ===========================================================================
